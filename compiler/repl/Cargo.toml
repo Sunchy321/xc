@@ -1,8 +1,5 @@
-[workspace]
-members = [ "compiler/lexer", "compiler/repl","compiler/xc"]
-
 [package]
-name = "x"
+name = "repl"
 version = "0.1.0"
 edition = "2021"
 
