@@ -1,5 +1,5 @@
 [workspace]
-members = [ "compiler/lexer", "compiler/repl","compiler/xc"]
+members = ["src/xc_ast"]
 
 [package]
 name = "x"
