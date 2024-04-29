@@ -1,8 +1,12 @@
+use crate::literal::Literal;
+
+#[derive(Clone)]
 pub enum CommentKind {
     Line,
     Block,
 }
 
+#[derive(Clone)]
 pub enum Delimiter {
     /// `(` `)`
     Paren,
@@ -14,6 +18,20 @@ pub enum Delimiter {
     DictBound,
 }
 
+#[derive(Clone)]
+pub enum CustomOp {
+    Op(String)
+}
+
+impl CustomOp {
+    pub fn as_str(&self) -> &str {
+        match self {
+            CustomOp::Op(op) => op.as_str(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum OpKind {
     /// `+!`
     Successor,
@@ -63,8 +81,12 @@ pub enum OpKind {
     NotEqual,
     /// `<`
     Less,
+    /// `!<`
+    NotLess,
     /// `>`
     Greater,
+    /// `!>`
+    NotGreater,
     /// `<=`
     LessEqual,
     /// `>=`
@@ -109,23 +131,10 @@ pub enum OpKind {
     /// `;`
     Semicolon,
 
-    Custom(&str),
+    Custom(CustomOp),
 }
 
-pub enum LiteralKind {
-    Bool,
-    Integer,
-    Floating,
-    String,
-    Symbol,
-}
-
-pub struct Literal {
-    pub kind: LiteralKind,
-    pub value: String,
-    pub suffix: Option<String>,
-}
-
+#[derive(Clone)]
 pub enum TokenKind {
     /// `:`
     Colon,
@@ -137,10 +146,12 @@ pub enum TokenKind {
     At,
 
     Op(OpKind),
-
     OpenDelim(Delimiter),
-
     ClosedDelim(Delimiter),
+
+    Literal(Literal),
+
+    Identifier(String),
 }
 
 pub struct Span {
@@ -150,4 +161,8 @@ pub struct Span {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+}
+
+pub fn is_bool(str: &String) -> bool {
+    str == "true" || str == "false"
 }
