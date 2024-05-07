@@ -2,7 +2,9 @@ pub mod cursor;
 pub mod helper;
 pub mod token;
 
-#[derive(Clone)]
+pub(crate) const EOF: char = '\0';
+
+#[derive(Clone, Debug)]
 pub enum Base {
     Binary,
     Decimal,

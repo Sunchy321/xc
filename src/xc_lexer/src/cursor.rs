@@ -1,5 +1,7 @@
 use std::str::Chars;
 
+use crate::EOF;
+
 pub struct Cursor<'a> {
     pub chars: Chars<'a>,
     pub prev: char,
@@ -10,7 +12,7 @@ impl<'a> Cursor<'a> {
     pub fn new(input: &'a str) -> Cursor<'a> {
         Cursor {
             chars: input.chars(),
-            prev: '\0',
+            prev: EOF,
             rest: input.len()
         }
     }
@@ -36,13 +38,13 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn peek(&self) -> char {
-        self.chars.clone().next().unwrap_or('\0')
+        self.chars.clone().next().unwrap_or(EOF)
     }
 
     pub(crate) fn peek_second(&self) -> char {
         let mut iter = self.chars.clone();
         iter.next();
-        iter.next().unwrap_or('\0')
+        iter.next().unwrap_or(EOF)
     }
 
     pub(crate) fn next(&mut self) -> Option<char> {
@@ -53,9 +55,14 @@ impl<'a> Cursor<'a> {
         Some(c)
     }
 
-    pub(crate) fn eats(&mut self, mut pred: impl FnMut(char) -> bool) {
+    pub(crate) fn eats(&mut self, mut pred: impl FnMut(char) -> bool) -> u32 {
+        let mut count = 0u32;
+
         while pred(self.peek()) && !self.is_eof() {
+            count += 1;
             self.next();
         }
+
+        count
     }
 }

@@ -29,3 +29,10 @@ pub fn is_id_start(c: char) -> bool {
 pub fn is_id_continue(c: char) -> bool {
     unicode_xid::UnicodeXID::is_xid_continue(c)
 }
+
+pub fn is_operator_part(c: char) -> bool {
+    matches!(
+        c,
+        '~' | '!' | '%' | '^' | '&' | '*' | '-' | '|' | '+' | '=' | '/' | '?' | '<' | '>' | '.' | '\''
+    )
+}
