@@ -20,7 +20,7 @@ pub enum Delimiter {
 
 #[derive(Clone)]
 pub enum CustomOp {
-    Op(String)
+    Op(String),
 }
 
 impl CustomOp {
@@ -154,10 +154,10 @@ pub enum TokenKind {
     Identifier(String),
 }
 
-pub struct Span {
+#[derive(Clone)]
+pub struct Span {}
 
-}
-
+#[derive(Clone)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,

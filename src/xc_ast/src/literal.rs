@@ -40,14 +40,19 @@ impl Literal {
 
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-       let Literal { kind, value, suffix } = self;
+        let Literal {
+            kind,
+            value,
+            suffix,
+        } = self;
 
         match kind {
-            LiteralKind::Bool | LiteralKind::Integer | LiteralKind::Floating => write!(f, "{value}")?,
+            LiteralKind::Bool | LiteralKind::Integer | LiteralKind::Floating => {
+                write!(f, "{value}")?
+            }
             LiteralKind::String => write!(f, "\"{value}\"")?,
             LiteralKind::Symbol => write!(f, "'{value}")?,
         }
-
 
         if let Some(suffix) = suffix {
             write!(f, "{suffix}")?;

@@ -1,7 +1,5 @@
 #[derive(Clone)]
-pub enum SuffixOpKind {
-    
-}
+pub enum SuffixOpKind {}
 
 #[derive(Clone)]
 pub struct SuffixOp {

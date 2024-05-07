@@ -98,7 +98,7 @@ pub enum InfixOpKind {
     /// `~>`
     ConcatRight,
 
-    Custom(CustomOp)
+    Custom(CustomOp),
 }
 
 #[derive(Clone)]

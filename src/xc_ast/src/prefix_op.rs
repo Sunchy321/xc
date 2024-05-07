@@ -1,7 +1,5 @@
 #[derive(Clone)]
-pub enum PrefixOpKind {
-
-}
+pub enum PrefixOpKind {}
 
 #[derive(Clone)]
 pub struct PrefixOp {
