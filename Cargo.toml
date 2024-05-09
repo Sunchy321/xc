@@ -1,11 +1,12 @@
 [workspace]
-members = ["src/xc_ast", "src/xc_lexer"]
+members = [ "src/xc_ast", "src/xc_error", "src/xc_lexer", "src/xc_macros", "src/xc_parse", "src/xc_span"]
 
 [package]
-name = "x"
+name = "xc"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+xc_parse = { version = "0.1.0", path = "src/xc_parse" }

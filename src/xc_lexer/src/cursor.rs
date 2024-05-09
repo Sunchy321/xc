@@ -5,15 +5,17 @@ use crate::EOF;
 pub struct Cursor<'a> {
     pub chars: Chars<'a>,
     pub prev: char,
-    pub rest: usize
+    pub rest: usize,
+    pub ctx: CursorContext
 }
 
 impl<'a> Cursor<'a> {
-    pub fn new(input: &'a str) -> Cursor<'a> {
+    pub fn new(input: &'a str, ctx: CursorContext) -> Cursor<'a> {
         Cursor {
             chars: input.chars(),
             prev: EOF,
-            rest: input.len()
+            rest: input.len(),
+            ctx
         }
     }
 
@@ -66,3 +68,9 @@ impl<'a> Cursor<'a> {
         count
     }
 }
+
+
+#[derive(Clone)]
+pub struct CursorContext {
+}
+

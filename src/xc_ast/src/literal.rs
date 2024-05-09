@@ -1,6 +1,9 @@
 use core::fmt;
+use std::os::windows::io::RawHandle;
 
-use crate::token::{is_bool, Token};
+use xc_span::Symbol;
+
+use crate::token::Token;
 
 #[derive(Clone, Copy)]
 pub enum LiteralKind {
@@ -8,18 +11,21 @@ pub enum LiteralKind {
     Integer,
     Floating,
     String,
+    RawString { at_count: u32 },
+    MultilineString { quote_count: u32 },
     Symbol,
+    Error
 }
 
 #[derive(Clone)]
 pub struct Literal {
     pub kind: LiteralKind,
-    pub value: String,
-    pub suffix: Option<String>,
+    pub value: Symbol,
+    pub suffix: Option<Symbol>,
 }
 
 impl Literal {
-    pub fn new(kind: LiteralKind, value: String, suffix: Option<String>) -> Self {
+    pub fn new(kind: LiteralKind, value: Symbol, suffix: Option<Symbol>) -> Self {
         Self {
             kind,
             value,
@@ -31,7 +37,7 @@ impl Literal {
         use crate::token::TokenKind::*;
 
         match token.kind.clone() {
-            Identifier(str) if is_bool(&str) => Some(Self::new(LiteralKind::Bool, str, None)),
+            Identifier(sym) if sym.is_bool_lit() => Some(Self::new(LiteralKind::Bool, sym, None)),
             Literal(lit) => Some(lit),
             _ => None,
         }
@@ -40,6 +46,8 @@ impl Literal {
 
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use LiteralKind::*;
+
         let Literal {
             kind,
             value,
@@ -47,11 +55,17 @@ impl fmt::Display for Literal {
         } = self;
 
         match kind {
-            LiteralKind::Bool | LiteralKind::Integer | LiteralKind::Floating => {
+            Bool | Integer | Floating | Error => {
                 write!(f, "{value}")?
             }
-            LiteralKind::String => write!(f, "\"{value}\"")?,
-            LiteralKind::Symbol => write!(f, "'{value}")?,
+            String => write!(f, "\"{value}\"")?,
+            RawString { at_count } => {
+                write!(f, "{count}\"{value}\"{count}", count = "@".repeat(*at_count as usize))?
+            }
+            MultilineString { quote_count } => {
+                write!(f, "{count}{value}{count}", count = "\"".repeat(*quote_count as usize))?
+            }
+            Symbol => write!(f, "'{value}")?,
         }
 
         if let Some(suffix) = suffix {

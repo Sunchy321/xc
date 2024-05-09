@@ -1,4 +1,5 @@
 use crate::literal::Literal;
+use xc_span::{Span, Symbol};
 
 #[derive(Clone)]
 pub enum CommentKind {
@@ -20,7 +21,7 @@ pub enum Delimiter {
 
 #[derive(Clone)]
 pub enum CustomOp {
-    Op(String),
+    Op(Symbol),
 }
 
 impl CustomOp {
@@ -32,130 +33,45 @@ impl CustomOp {
 }
 
 #[derive(Clone)]
-pub enum OpKind {
-    /// `+!`
-    Successor,
-    /// `-!`
-    Predecessor,
-    /// `?`
-    Null,
-
-    /// `!`
-    Not,
-    /// `'~`
-    BitNot,
-
-    /// `*`
-    Multiply,
-    /// `/`
-    Divide,
-    /// `%`
-    Modulo,
-
-    /// `+`
-    Plus,
-    /// `-`
-    Subtract,
-
-    /// `'&`
-    BitAnd,
-    /// `'^`
-    BitXor,
-    /// `'|`
-    BitOr,
-
-    /// `..`
-    Range,
-    /// `..=`
-    ClosedRange,
-
-    /// `~`
-    Concat,
-
-    /// `??`
-    NullCoalescing,
-
-    /// `==`
-    Equal,
-    /// `!=`
-    NotEqual,
-    /// `<`
-    Less,
-    /// `!<`
-    NotLess,
-    /// `>`
-    Greater,
-    /// `!>`
-    NotGreater,
-    /// `<=`
-    LessEqual,
-    /// `>=`
-    GreaterEqual,
-    /// `<>`
-    LessGreater,
-
-    /// `&`
-    And,
-    /// `|`
-    Or,
-
-    /// `=`
-    Assign,
-    /// `+=`
-    PlusAssign,
-    /// `-=`
-    SubtractAssign,
-    /// `*=`
-    MultiplyAssign,
-    /// `/=`
-    DivideAssign,
-    /// `%=`
-    ModuloAssign,
-    /// `'&=`
-    BitAndAssign,
-    /// `'^=`
-    BitXorAssign,
-    /// `'|=`
-    BitOrAssign,
-    /// `??=`
-    NullCoalescingAssign,
-    /// `++`
-    Increment,
-    /// `--`
-    Decrement,
-    /// `~>`
-    ConcatLeft,
-    /// `<~`
-    ConcatRight,
-
-    /// `;`
-    Semicolon,
-
-    Custom(CustomOp),
-}
-
-#[derive(Clone)]
 pub enum TokenKind {
-    /// `:`
-    Colon,
-    /// `::`
-    ColonColon,
-    /// `,`
-    Comma,
-    /// `@`
+    /// @
     At,
+    /// #
+    Pound,
+    /// $
+    Dollar,
+    /// ;
+    Semicolon,
+    /// :
+    Colon,
+    /// ,
+    Comma,
 
-    Op(OpKind),
+    /// '(
+    SymbolOpen,
+    /// ::
+    ColonColon,
+    /// ->
+    RightArrow,
+    /// =>
+    FatArrow,
+    /// ...
+    DotDotDot,
+
+    Op(Symbol),
     OpenDelim(Delimiter),
     ClosedDelim(Delimiter),
 
     Literal(Literal),
+    SymbolLit(Symbol),
 
-    Identifier(String),
+    Identifier(Symbol),
+
+    LambdaArgUnnamed(u32),
+    LambdaArgNamed(String),
+
+    Eof,
 }
-
-#[derive(Clone)]
-pub struct Span {}
 
 #[derive(Clone)]
 pub struct Token {
@@ -163,6 +79,3 @@ pub struct Token {
     pub span: Span,
 }
 
-pub fn is_bool(str: &String) -> bool {
-    str == "true" || str == "false"
-}

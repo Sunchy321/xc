@@ -1,10 +1,12 @@
 [package]
-name = "xc_ast"
+name = "xc_span"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thin-vec = "0.2.13"
-xc_span = { version = "0.1.0", path = "../xc_span" }
+bumpalo = "3.16.0"
+indexmap = "2.2.6"
+scoped-tls = "1.0.1"
+xc_macros = { version = "0.1.0", path = "../xc_macros" }

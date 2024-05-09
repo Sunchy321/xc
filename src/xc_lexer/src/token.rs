@@ -1,3 +1,7 @@
+use std::string::String;
+
+use xc_span::Symbol;
+
 use self::LiteralKind::*;
 use self::TokenKind::*;
 use crate::cursor::Cursor;
@@ -15,7 +19,7 @@ pub enum TokenKind {
     Whitespace,
 
     Identifier,
-    Symbol {
+    SymbolLit {
         terminated: bool,
     },
 
@@ -26,8 +30,7 @@ pub enum TokenKind {
         suffix_start: u32,
     },
 
-    LambdaArgUnnamed,
-    LambdaArgNamed,
+    LambdaArg,
 
     /// @
     At,
@@ -62,6 +65,12 @@ pub enum TokenKind {
     SymbolOpen,
     /// ::
     ColonColon,
+    /// ->
+    RightArrow,
+    /// =>
+    FatArrow,
+    /// ...
+    DotDotDot,
 
     Unknown,
     Eof,
@@ -123,7 +132,7 @@ impl<'a> Cursor<'a> {
             '/' => match self.peek() {
                 '/' => self.line_comment(),
                 '*' => self.block_comment(),
-                _ => self.operator(),
+                _ => self.operator(first),
             },
 
             c if is_whitespace(c) => self.whitespace(),
@@ -140,7 +149,7 @@ impl<'a> Cursor<'a> {
             '\'' => match self.peek() {
                 c if is_id_start(c) => {
                     self.eat_identifier();
-                    Symbol { terminated: true }
+                    SymbolLit { terminated: true }
                 }
 
                 '(' => {
@@ -148,7 +157,7 @@ impl<'a> Cursor<'a> {
                     SymbolOpen
                 }
 
-                _ => self.operator(),
+                _ => self.operator(first),
             },
 
             '#' => Pound,
@@ -184,18 +193,18 @@ impl<'a> Cursor<'a> {
                     CloseDict
                 }
 
-                _ => self.operator(),
+                _ => self.operator(first),
             },
 
             '$' => match self.peek() {
                 '0'..='9' => {
                     self.eats(|c| c.is_digit(10));
-                    LambdaArgUnnamed
+                    LambdaArg
                 }
 
                 c if is_id_start(c) => {
                     self.eat_identifier();
-                    LambdaArgNamed
+                    LambdaArg
                 }
 
                 _ => Dollar,
@@ -234,12 +243,12 @@ impl<'a> Cursor<'a> {
                     if terminated {
                         self.eat_suffix();
                     }
-                    let kind = String { terminated };
+                    let kind = LiteralKind::String { terminated };
                     Literal { kind, suffix_start }
                 }
             }
 
-            c if is_operator_part(c) => self.operator(),
+            c if is_operator_part(c) => self.operator(first),
 
             _ => Unknown,
         };
@@ -309,10 +318,35 @@ impl<'a> Cursor<'a> {
         Identifier
     }
 
-    fn operator(&mut self) -> TokenKind {
+    fn operator(&mut self, first: char) -> TokenKind {
         debug_assert!(is_operator_part(self.prev()));
-        self.eats(is_operator_part);
-        Operator
+
+        let mut op = String::from(first);
+
+        loop {
+            let c = self.peek();
+
+            if !is_operator_part(c) {
+                break;
+            }
+
+            let mut new_op = op.clone();
+
+            new_op.push(c);
+
+            if !Symbol::has_intern(&new_op) {
+                break;
+            }
+
+            op = new_op;
+        }
+
+        match op.as_str() {
+            "->" => RightArrow,
+            "=>" => FatArrow,
+            "..." => DotDotDot,
+            _ => Operator
+        }
     }
 
     fn double_quoted_string(&mut self) -> bool {
@@ -478,110 +512,81 @@ impl<'a> Cursor<'a> {
     fn numeric(&mut self, first: char) -> LiteralKind {
         debug_assert!('0' <= self.prev() && self.prev() <= '9');
 
+        let mut base = Base::Decimal;
+
         if first == '0' {
             match self.peek() {
                 'b' => {
+                    base = Base::Binary;
                     self.next();
-                    self.binary()
+
+                    if !self.eat_decimals() {
+                        return Integer { base, is_empty: true }
+                    }
                 }
                 'x' => {
+                    base = Base::Hexadecimal;
                     self.next();
-                    self.hexadecimal()
+
+                    if !self.eat_hexadecimals() {
+                        return Integer { base, is_empty: true }
+                    }
                 }
-                _ => self.decimal(),
+
+                '0' ..= '9' | '_' => {
+                    self.eat_decimals();
+                }
+
+                '.' | 'e' | 'E' => { }
+
+                _ => return Integer { base, is_empty: false }
             }
         } else {
-            self.decimal()
-        }
-    }
-
-    fn binary(&mut self) -> LiteralKind {
-        debug_assert!(self.prev() == 'b');
-        let eaten = self.eat_decimals();
-        Integer {
-            base: Base::Binary,
-            is_empty: !eaten,
-        }
-    }
-
-    fn hexadecimal(&mut self) -> LiteralKind {
-        debug_assert!(self.prev() == 'x');
-        let eaten = self.eat_hexadecimals();
-
-        if !eaten {
-            return Integer {
-                base: Base::Hexadecimal,
-                is_empty: true,
-            };
-        }
-
-        let mut eaten_dots = false;
-
-        if self.peek() == '.' && self.peek_second().is_digit(16) {
-            self.next();
-            self.eat_hexadecimals();
-            eaten_dots = true;
-        }
-
-        let mut eaten_exp = false;
-        let mut empty_exp = false;
-
-        if self.peek() == 'p' || self.peek() == 'P' {
-            self.next();
-            empty_exp = !self.eat_exponent();
-            eaten_exp = true;
-        }
-
-        if eaten_dots || eaten_exp {
-            Floating {
-                base: Base::Hexadecimal,
-                empty_exponent: empty_exp,
-            }
-        } else {
-            Integer {
-                base: Base::Hexadecimal,
-                is_empty: false,
-            }
-        }
-    }
-
-    fn decimal(&mut self) -> LiteralKind {
-        debug_assert!('0' < self.prev() && self.prev() <= '9');
-        let eaten = self.eat_decimals();
-
-        if !eaten {
-            return Integer {
-                base: Base::Decimal,
-                is_empty: false,
-            };
-        }
-
-        let mut eaten_dots = false;
-
-        if self.peek() == '.' && self.peek_second().is_digit(10) {
-            self.next();
             self.eat_decimals();
-            eaten_dots = true;
         }
 
-        let mut eaten_exp = false;
-        let mut empty_exp = false;
+        let mut has_fractional = false;
 
-        if self.peek() == 'e' || self.peek() == 'E' {
-            self.next();
-            empty_exp = !self.eat_exponent();
-            eaten_exp = true;
-        }
+        match self.peek() {
+            '.' => {
+                match self.peek_second() {
+                    '0' ..= '9' => {
+                        self.next();
+                        self.eat_decimals();
+                        has_fractional = true;
+                    }
 
-        if eaten_dots || eaten_exp {
-            Floating {
-                base: Base::Decimal,
-                empty_exponent: empty_exp,
+                    'a' ..= 'f' | 'A' ..= 'F' if base == Base::Hexadecimal => {
+                        self.next();
+                        self.eat_hexadecimals();
+                        has_fractional = true;
+                    }
+
+                    _ => return Integer { base, is_empty: false }
+                }
             }
-        } else {
-            Integer {
-                base: Base::Decimal,
-                is_empty: false,
+            _ => {}
+        }
+
+        match self.peek() {
+            'e' | 'E' if base != Base::Hexadecimal => {
+                self.next();
+                let empty_exponent = !self.eat_exponent();
+                Floating { base, empty_exponent }
+            }
+
+            'p' | 'P' if base == Base::Hexadecimal => {
+                self.next();
+                let empty_exponent = !self.eat_exponent();
+                Floating { base, empty_exponent }
+            }
+
+            _ => {
+                if has_fractional {
+                    Floating { base, empty_exponent: false }
+                } else {
+                    Integer { base, is_empty: false }
+                }
             }
         }
     }
@@ -631,9 +636,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn eat_exponent(&mut self) -> bool {
-        debug_assert!(
-            self.prev() == 'e' || self.prev() == 'E' || self.prev() == 'p' || self.prev() == 'P'
-        );
+        debug_assert!(matches!(self.prev(), 'e' | 'E' | 'p' | 'P'));
 
         if self.peek() == '+' || self.peek() == '-' {
             self.next();

@@ -1,10 +1,9 @@
 [package]
-name = "xc_ast"
+name = "xc_error"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thin-vec = "0.2.13"
-xc_span = { version = "0.1.0", path = "../xc_span" }
+termcolor = "1.4.1"
