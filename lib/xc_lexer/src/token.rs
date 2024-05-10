@@ -19,9 +19,6 @@ pub enum TokenKind {
     Whitespace,
 
     Identifier,
-    SymbolLit {
-        terminated: bool,
-    },
 
     Operator,
 
@@ -80,8 +77,10 @@ pub enum TokenKind {
 pub enum LiteralKind {
     Integer { base: Base, is_empty: bool },
     Floating { base: Base, empty_exponent: bool },
+    Char { terminated: bool },
     String { terminated: bool },
     RawString { at_count: Option<u32> },
+    SymbolLit,
 }
 
 #[derive(Clone)]
@@ -145,19 +144,7 @@ impl<'a> Cursor<'a> {
                 Literal { kind, suffix_start }
             }
 
-            '\'' => match self.peek() {
-                c if is_id_start(c) => {
-                    self.eat_identifier();
-                    SymbolLit { terminated: true }
-                }
-
-                '(' => {
-                    self.next();
-                    SymbolOpen
-                }
-
-                _ => self.operator(first),
-            },
+            '\'' => self.char_symbol_op(),
 
             '#' => Pound,
             '(' => OpenParen,
@@ -436,6 +423,69 @@ impl<'a> Cursor<'a> {
                 at_max_count = at_end_count;
             }
         }
+    }
+
+    fn char_symbol_op(&mut self) -> TokenKind {
+        debug_assert!(self.prev() == '\'');
+        self.next();
+
+        let kind = match self.peek() {
+            '\\' => Char { terminated: self.character() },
+            '\'' => Char { terminated: self.character() },
+            _ if self.peek_second() == '\'' => Char { terminated: self.character() },
+            '(' => { self.next(); return SymbolOpen },
+            c if is_operator_part(c) => return self.operator(c),
+            c if is_id_start(c) => self.symbol(),
+            _ => Char { terminated: self.character() },
+        };
+
+        let suffix_start = self.curr_len();
+
+        match kind {
+            Char { terminated } => {
+                let suffix_start = self.curr_len();
+                if terminated {
+                    self.eat_suffix();
+                }
+                Literal { kind, suffix_start }
+            }
+            SymbolLit => {
+                Literal { kind, suffix_start }
+            }
+            _ => unreachable!("Invalid character literal kind: {:?}", kind)
+        }
+    }
+
+    fn character(&mut self) -> bool {
+        debug_assert!(self.prev() == '\'');
+
+        while let Some(c) = self.next() {
+            match c {
+                '\'' => {
+                    return true;
+                }
+
+                '\\' if self.peek() == '\\' || self.peek() == '\'' => {
+                    // Bump again to skip escaped character.
+                    self.next();
+                }
+
+                '\n' => return false,
+
+                _ => (),
+            }
+        }
+
+        // End of file reached.
+        false
+    }
+
+    fn symbol(&mut self) -> LiteralKind {
+        debug_assert!(self.prev() == '\'' && is_id_start(self.peek()));
+
+        self.eat_identifier();
+
+        SymbolLit
     }
 
     fn numeric(&mut self, first: char) -> LiteralKind {

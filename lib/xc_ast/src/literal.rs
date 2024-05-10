@@ -11,7 +11,8 @@ pub enum LiteralKind {
     Floating,
     String,
     RawString { at_count: u32 },
-    Symbol,
+    Char,
+    SymbolLit,
     Error
 }
 

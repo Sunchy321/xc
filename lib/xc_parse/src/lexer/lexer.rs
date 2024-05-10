@@ -1,5 +1,5 @@
 use xc_ast::{literal::{Literal, LiteralKind}, token::*};
-use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_string}, Base};
+use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_char, unescape_string}, Base};
 use xc_span::{BytePos, Span, Symbol};
 
 use super::nfc_normalize;
@@ -68,14 +68,6 @@ impl<'src> Lexer<'src> {
                 }
 
                 xc_lexer::TokenKind::Identifier => self.proc_identifier(start),
-
-                xc_lexer::TokenKind::SymbolLit { terminated } => {
-                    if !terminated {
-                        self.raise_error();
-                    }
-
-                    self.proc_symbol(start)
-                }
 
                 xc_lexer::TokenKind::Literal { kind, suffix_start } => {
                     let suffix_start = start + BytePos(suffix_start);
@@ -155,12 +147,6 @@ impl<'src> Lexer<'src> {
         TokenKind::Op(sym)
     }
 
-    fn proc_symbol(&self, start: BytePos) -> TokenKind {
-        let sym = Symbol::intern(self.str_from(start + BytePos(1)));
-
-        TokenKind::SymbolLit(sym)
-    }
-
     fn proc_lexer_literal(
         &self,
         start: BytePos,
@@ -226,6 +212,18 @@ impl<'src> Lexer<'src> {
                     self.raise_error();
                 }
             }
+
+            xc_lexer::LiteralKind::Char { terminated } => {
+                if !terminated {
+                    self.raise_error();
+                }
+
+                self.proc_character(LiteralKind::Char, start, end, 1, 1)
+            }
+
+            xc_lexer::LiteralKind::SymbolLit => {
+                (LiteralKind::SymbolLit, self.symbol_from_to(start + BytePos(1), end))
+            }
         }
     }
 
@@ -285,6 +283,39 @@ impl<'src> Lexer<'src> {
                 kind = LiteralKind::Error;
             }
         });
+
+        let sym = if !matches!(kind, LiteralKind::Error) {
+            Symbol::intern(content)
+        } else {
+            self.symbol_from_to(start, end)
+        };
+
+        (kind, sym)
+    }
+
+    fn proc_character(
+        &self,
+        mut kind: LiteralKind,
+        start: BytePos,
+        end: BytePos,
+        prefix: u32,
+        postfix: u32,
+    ) -> (LiteralKind, Symbol) {
+        let content_start = start + BytePos(prefix);
+        let content_end = end - BytePos(postfix);
+        let content = self.str_from_to(content_start, content_end);
+
+        let result = unescape_char(content);
+
+        if let Err(err) = result {
+            // let full_span = self.make_span(start, end);
+            // let (start, end) = (range.start as u32, range.end as u32);
+            // let lo = content_start + BytePos(start);
+            // let hi = lo + BytePos(end - start);
+            // let span = self.make_span(lo, hi);
+
+            kind = LiteralKind::Error;
+        }
 
         let sym = if !matches!(kind, LiteralKind::Error) {
             Symbol::intern(content)

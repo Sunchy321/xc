@@ -1,6 +1,10 @@
 use std::{char::from_u32, ops::Range, str::Chars};
 
 pub enum EscapeError {
+    ZeroChars,
+    MoreThanOneChar,
+    EscapeOnlyChar,
+
     LoneBackslash,
     InvalidEscape,
     BareCarriageReturn,
@@ -133,4 +137,19 @@ where
 
         callback(start..end, res);
     }
+}
+
+pub fn unescape_char(src: &str) -> Result<char, EscapeError> {
+    let mut chars = src.chars();
+    let c = chars.next().ok_or(EscapeError::ZeroChars)?;
+    let res = match c {
+        '\\' => scan_escape(&mut chars),
+        '\n' | '\t' | '\'' => Err(EscapeError::EscapeOnlyChar),
+        '\r' => Err(EscapeError::BareCarriageReturn),
+        _ => Ok(c),
+    }?;
+    if chars.next().is_some() {
+        return Err(EscapeError::MoreThanOneChar);
+    }
+    Ok(res)
 }
