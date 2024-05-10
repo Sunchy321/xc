@@ -3,7 +3,6 @@ use std::{char::from_u32, ops::Range, str::Chars};
 pub enum EscapeError {
     LoneBackslash,
     InvalidEscape,
-    NewlineInNormalString,
     BareCarriageReturn,
 
     NoBraceInUnicodeEscape,
@@ -105,7 +104,6 @@ where
                 }
             },
 
-            '\n' => Err(EscapeError::NewlineInNormalString),
             '\r' => Err(EscapeError::BareCarriageReturn),
             _ => Ok(c),
         };
@@ -126,43 +124,8 @@ where
         let start = src.len() - chars.as_str().len() - c.len_utf8();
 
         let res = match c {
-            '\n' => Err(EscapeError::NewlineInNormalString),
             '\r' => Err(EscapeError::BareCarriageReturn),
 
-            _ => Ok(c),
-        };
-
-        let end = src.len() - chars.as_str().len();
-
-        callback(start..end, res);
-    }
-}
-
-pub fn unescape_multiline_string<F>(src: &str, callback: &mut F)
-where
-    F: FnMut(Range<usize>, Result<char, EscapeError>),
-{
-    let mut chars = src.chars();
-
-    while let Some(c) = chars.next() {
-        let start = src.len() - chars.as_str().len() - c.len_utf8();
-
-        let res = match c {
-            '\\' => {
-                match chars.clone().next() {
-                    Some('(') => {
-                        if let Some(err) = check_interpolation(&mut chars, None) {
-                            Err(err)
-                        } else {
-                            Ok('\0')
-                        }
-                    }
-                    _ => scan_escape(&mut chars)
-                }
-            },
-
-            '\n' => Err(EscapeError::NewlineInNormalString),
-            '\r' => Err(EscapeError::BareCarriageReturn),
             _ => Ok(c),
         };
 

@@ -82,7 +82,6 @@ pub enum LiteralKind {
     Floating { base: Base, empty_exponent: bool },
     String { terminated: bool },
     RawString { at_count: Option<u32> },
-    MultilineString { quote_count: Option<u32> },
 }
 
 #[derive(Clone)]
@@ -227,17 +226,6 @@ impl<'a> Cursor<'a> {
             },
 
             '"' => {
-                if self.peek() == '"' && self.peek_second() == '"' {
-                    let quote_count = self.multiline_string();
-                    let suffix_start = self.curr_len();
-                    if quote_count.is_ok() {
-                        self.eat_suffix();
-                    }
-                    let kind = MultilineString {
-                        quote_count: quote_count.ok(),
-                    };
-                    Literal { kind, suffix_start }
-                } else {
                     let terminated = self.double_quoted_string();
                     let suffix_start = self.curr_len();
                     if terminated {
@@ -245,7 +233,6 @@ impl<'a> Cursor<'a> {
                     }
                     let kind = LiteralKind::String { terminated };
                     Literal { kind, suffix_start }
-                }
             }
 
             c if is_operator_part(c) => self.operator(first),
@@ -447,64 +434,6 @@ impl<'a> Cursor<'a> {
                 // where there might be a missing terminator
                 possible_terminator_offset = Some(self.curr_len() - at_end_count);
                 at_max_count = at_end_count;
-            }
-        }
-    }
-
-    fn multiline_string(&mut self) -> Result<u32, MultilineStrError> {
-        debug_assert!(self.prev() == '"');
-        let mut possible_terminator_offset = None;
-        let mut quote_max_count = 0;
-
-        // Count opening '"' symbols.
-        let quote_start_count = self.eats(|c| c == '"') + 1;
-
-        // Skip the string contents and on each '#' character met, check if this is
-        // a raw string termination.
-        loop {
-            self.eats(|c| c != '"' && c != '\\' && c != '\n');
-
-            if self.peek() == '\n' || self.is_eof() {
-                return Err(MultilineStrError::NoTerminator {
-                    expected: quote_start_count,
-                    found: quote_max_count,
-                    possible_terminator_offset,
-                });
-            }
-
-            // interplorations for raw strings. e.g. `@"1 + 1 = \@(1+1)"@`
-            if self.peek() == '\\' {
-                self.next();
-
-                let at_eaten = self.eats(|c| c == '@');
-
-                if at_eaten == quote_start_count && self.peek() == '(' {
-                    self.next();
-
-                    if !self.eat_interplorations() {
-                        return Err(MultilineStrError::OpenInterploration);
-                    }
-                }
-
-                continue;
-            }
-
-            // Eating closing `"` symbols. Too many `"` is eaten and becomes an error.
-            let at_end_count = self.eats(|c| c == '"');
-
-            if at_end_count == quote_start_count {
-                return Ok(quote_start_count);
-            } else if at_end_count > quote_start_count {
-                return Err(MultilineStrError::TooManyTerminator {
-                    found: at_end_count,
-                });
-            }
-
-            if at_end_count > quote_max_count {
-                // Keep track of possible terminators to give a hint about
-                // where there might be a missing terminator
-                possible_terminator_offset = Some(self.curr_len() - at_end_count);
-                quote_max_count = at_end_count;
             }
         }
     }

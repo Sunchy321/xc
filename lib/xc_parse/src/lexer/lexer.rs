@@ -1,5 +1,5 @@
 use xc_ast::{literal::{Literal, LiteralKind}, token::*};
-use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_multiline_string, unescape_string}, Base};
+use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_string}, Base};
 use xc_span::{BytePos, Span, Symbol};
 
 use super::nfc_normalize;
@@ -226,14 +226,6 @@ impl<'src> Lexer<'src> {
                     self.raise_error();
                 }
             }
-
-            xc_lexer::LiteralKind::MultilineString { quote_count } => {
-                if let Some(quote_count) = quote_count{
-                    self.proc_multiline_string(LiteralKind::MultilineString { quote_count }, start, end, quote_count, quote_count)
-                } else {
-                    self.raise_error();
-                }
-            }
         }
     }
 
@@ -283,39 +275,6 @@ impl<'src> Lexer<'src> {
         let content = self.str_from_to(content_start, content_end);
 
         check_raw_string(content, &mut |range, result| {
-            if let Err(err) = result {
-                let full_span = self.make_span(start, end);
-                let (start, end) = (range.start as u32, range.end as u32);
-                let lo = content_start + BytePos(start);
-                let hi = lo + BytePos(end - start);
-                let span = self.make_span(lo, hi);
-
-                kind = LiteralKind::Error;
-            }
-        });
-
-        let sym = if !matches!(kind, LiteralKind::Error) {
-            Symbol::intern(content)
-        } else {
-            self.symbol_from_to(start, end)
-        };
-
-        (kind, sym)
-    }
-
-    fn proc_multiline_string(
-        &self,
-        mut kind: LiteralKind,
-        start: BytePos,
-        end: BytePos,
-        prefix: u32,
-        postfix: u32,
-    ) -> (LiteralKind, Symbol) {
-        let content_start = start + BytePos(prefix);
-        let content_end = end - BytePos(postfix);
-        let content = self.str_from_to(content_start, content_end);
-
-        unescape_multiline_string(content, &mut |range, result| {
             if let Err(err) = result {
                 let full_span = self.make_span(start, end);
                 let (start, end) = (range.start as u32, range.end as u32);

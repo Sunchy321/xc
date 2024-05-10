@@ -1,5 +1,4 @@
 use core::fmt;
-use std::os::windows::io::RawHandle;
 
 use xc_span::Symbol;
 
@@ -12,7 +11,6 @@ pub enum LiteralKind {
     Floating,
     String,
     RawString { at_count: u32 },
-    MultilineString { quote_count: u32 },
     Symbol,
     Error
 }
@@ -61,9 +59,6 @@ impl fmt::Display for Literal {
             String => write!(f, "\"{value}\"")?,
             RawString { at_count } => {
                 write!(f, "{count}\"{value}\"{count}", count = "@".repeat(*at_count as usize))?
-            }
-            MultilineString { quote_count } => {
-                write!(f, "{count}{value}{count}", count = "\"".repeat(*quote_count as usize))?
             }
             Symbol => write!(f, "'{value}")?,
         }
