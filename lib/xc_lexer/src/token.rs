@@ -574,7 +574,7 @@ impl<'a> Cursor<'a> {
         let mut has_digits = false;
         loop {
             match self.peek() {
-                '_' => match self.peek_second() {
+                '\'' => match self.peek_second() {
                     '0'..='9' => {
                         has_digits = true;
                         self.next();
@@ -596,7 +596,7 @@ impl<'a> Cursor<'a> {
         let mut has_digits = false;
         loop {
             match self.peek() {
-                '_' => match self.peek_second() {
+                '\'' => match self.peek_second() {
                     '0'..='9' | 'a'..='f' | 'A'..='F' => {
                         has_digits = true;
                         self.next();
