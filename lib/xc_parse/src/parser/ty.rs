@@ -7,6 +7,18 @@ use super::{parser::Parser, HasTrailing};
 
 impl Parser {
     pub fn parse_type(&mut self) -> Result<P<Type>, ()> {
+        self.parse_type_expr()
+    }
+
+    pub fn parse_type_expr(&mut self) -> Result<TypeKind, ()> {
+        self.parse_type_result()
+    }
+
+    pub fn parse_type_result(&mut self) -> Result<TypeKind, ()> {
+        let ty = self.parse_type_normal();
+    }
+
+    pub fn parse_type_normal(&mut self) -> Result<TypeKind, ()> {
         use TokenKind::*;
 
         let lo = self.token.span;

@@ -4,7 +4,7 @@ pub mod define;
 
 pub use crate::symbol::Symbol;
 
-use std::ops::{Add, Sub, AddAssign};
+use std::{cmp, ops::{Add, AddAssign, Sub}};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BytePos(pub u32);
@@ -44,8 +44,8 @@ impl AddAssign for BytePos {
 
 #[derive(Clone, Copy)]
 pub struct Span {
-    pub lo: u32,
-    pub hi: u32,
+    pub lo: BytePos,
+    pub hi: BytePos,
 }
 
 impl Span {
@@ -54,15 +54,21 @@ impl Span {
             std::mem::swap(&mut lo, &mut hi);
         }
 
-        Self { lo: lo.0, hi: hi.0 }
+        Self { lo, hi }
     }
 
-    pub const DUMMY: Self = Self { lo: 0, hi: 0 };
+    pub const DUMMY: Self = Self { lo: BytePos(0), hi: BytePos(0) };
 
     pub fn is_dummy(self) -> bool {
         self.lo == self.hi
     }
 
+    pub fn to(self, end: Span) -> Span {
+        Span::new(
+            cmp::min(self.lo, end.lo),
+            cmp::max(self.lo, end.lo),
+        )
+    }
 }
 
 pub struct SessionGlobals {
