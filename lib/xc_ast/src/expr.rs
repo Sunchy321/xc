@@ -1,15 +1,14 @@
 use thin_vec::ThinVec;
+use xc_span::Symbol;
 
-use crate::infix_op::InfixOp;
+use crate::op::{ SuffixOp, PrefixOp, InfixOp};
 use crate::literal::Literal;
 use crate::pattern::Pattern;
-use crate::prefix_op::PrefixOp;
 use crate::ptr::P;
-use crate::suffix_op::SuffixOp;
 use crate::ty::Type;
 
 #[derive(Clone)]
-pub enum ExprKind {
+pub enum PrimaryExpr {
     /// Paren (`(e)`)
     Paren(P<Expr>),
     /// A literal (`0`, `true`, `"hello"`, etc.)
@@ -18,27 +17,34 @@ pub enum ExprKind {
     Array(ThinVec<ExprItem>),
     /// Tuple literal (`(1, 2, 3)`)
     Tuple(ThinVec<ExprItem>),
-    /// Object literal (`{a: 1, b: 2}`)
-    Object(ThinVec<(String, ExprItem)>),
+    /// Struct literal (`{a: 1, b: 2}`)
+    Struct(ThinVec<(Symbol, ExprItem)>),
     /// Dictionary literal (`{| a: 1, b: 2 |}`)
-    Dict(ThinVec<(String, ExprItem)>),
+    Dict(ThinVec<(Symbol, ExprItem)>),
     /// `nil`
     Nil,
     /// `this`
     This,
     /// `$`
     Dollar,
+}
+
+#[derive(Clone)]
+pub enum ExprKind {
+    Primary(PrimaryExpr),
 
     /// Suffix exprs (`a?`)
     Suffix(SuffixOp, P<Expr>),
     /// Function calls (`foo(a, b, c)`)
     Call(P<Expr>, Arguments),
+    /// MemberAccess (`foo.bar`)
+    MemberAccess(P<Expr>, Symbol),
     /// Method calls (`foo.bar(a, b, c)`)
     MethodCall(Box<MethodCall>),
     /// Subscripting (`foo[bar]`)
     Subscript(P<Expr>, Arguments),
     /// Casting (`a as int`)
-    Cast(P<Expr>, P<Type>),
+    Cast(P<Expr>, P<Type>, CastType),
     /// Awaiting (`foo().await`)
     Await(P<Expr>),
     /// Catching (`foo().catch`)
@@ -83,4 +89,11 @@ pub struct MethodCall {
     pub receiver: P<Expr>,
     pub method_name: String,
     pub args: Arguments,
+}
+
+#[derive(Clone)]
+pub enum CastType {
+    Normal,
+    Optional,
+    Forced,
 }

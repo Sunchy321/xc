@@ -92,13 +92,13 @@ impl<'src> Lexer<'src> {
                 }
 
                 xc_lexer::TokenKind::OpenParen => TokenKind::OpenDelim(Delimiter::Paren),
-                xc_lexer::TokenKind::CloseParen => TokenKind::ClosedDelim(Delimiter::Paren),
+                xc_lexer::TokenKind::CloseParen => TokenKind::CloseDelim(Delimiter::Paren),
                 xc_lexer::TokenKind::OpenBracket => TokenKind::OpenDelim(Delimiter::Bracket),
-                xc_lexer::TokenKind::CloseBracket => TokenKind::ClosedDelim(Delimiter::Bracket),
+                xc_lexer::TokenKind::CloseBracket => TokenKind::CloseDelim(Delimiter::Bracket),
                 xc_lexer::TokenKind::OpenBrace => TokenKind::OpenDelim(Delimiter::Brace),
-                xc_lexer::TokenKind::CloseBrace => TokenKind::ClosedDelim(Delimiter::Brace),
+                xc_lexer::TokenKind::CloseBrace => TokenKind::CloseDelim(Delimiter::Brace),
                 xc_lexer::TokenKind::OpenDict => TokenKind::OpenDelim(Delimiter::DictBound),
-                xc_lexer::TokenKind::CloseDict => TokenKind::ClosedDelim(Delimiter::DictBound),
+                xc_lexer::TokenKind::CloseDict => TokenKind::CloseDelim(Delimiter::DictBound),
 
                 xc_lexer::TokenKind::At => TokenKind::At,
                 xc_lexer::TokenKind::Pound => TokenKind::Pound,

@@ -1,5 +1,5 @@
-use crate::literal::Literal;
-use xc_span::{Span, Symbol};
+use crate::{literal::Literal, op::Operator};
+use xc_span::{Identifier, Span, Symbol};
 
 #[derive(Clone)]
 pub enum CommentKind {
@@ -7,7 +7,7 @@ pub enum CommentKind {
     Block,
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Delimiter {
     /// `(` `)`
     Paren,
@@ -17,6 +17,8 @@ pub enum Delimiter {
     Brace,
     /// `{|` `|}`
     DictBound,
+
+    Invisible,
 }
 
 #[derive(Clone)]
@@ -32,7 +34,7 @@ impl CustomOp {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum TokenKind {
     /// @
     At,
@@ -60,10 +62,9 @@ pub enum TokenKind {
 
     Op(Symbol),
     OpenDelim(Delimiter),
-    ClosedDelim(Delimiter),
+    CloseDelim(Delimiter),
 
     Literal(Literal),
-    SymbolLit(Symbol),
 
     Identifier(Symbol),
 
@@ -73,9 +74,36 @@ pub enum TokenKind {
     Eof,
 }
 
+impl TokenKind {
+    pub fn is_punc(&self) -> bool {
+        use TokenKind::*;
+
+        match self {
+            At | Pound | Dollar | Semicolon | Colon | Comma | SymbolOpen | ColonColon
+            | RightArrow | FatArrow | DotDotDot | Op(_) | OpenDelim(_) | CloseDelim(_) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 
+impl Token {
+    pub fn is_keyword(&self, key: Symbol) -> bool {
+        match self.to_identifier() {
+            Some(id) => id.name == key,
+            None => false,
+        }
+    }
+
+    pub fn to_identifier(&self) -> Option<Identifier> {
+        match &self.kind {
+            &TokenKind::Identifier(name) => Some(Identifier::new(name, self.span)),
+            _ => None,
+        }
+    }
+}

@@ -1,4 +1,60 @@
-use crate::token::CustomOp;
+use xc_span::Symbol;
+
+#[derive(Clone)]
+pub enum Operator {
+    Prefix(PrefixOp),
+    Suffix(SuffixOp),
+    Infix(InfixOp),
+    Custom(Symbol)
+}
+
+#[derive(Clone)]
+pub enum OperatorKind {
+    Prefix,
+    Suffix,
+    Infix
+}
+
+#[derive(Clone)]
+pub enum SuffixOpKind {
+    /// `?`
+    NullCheck,
+    /// `!`
+    NullAssert,
+
+    /// `+!`
+    Precedence,
+    /// `-!`
+    Successor,
+
+    /// `++`
+    Increment,
+    /// `--`
+    Decrement,
+}
+
+#[derive(Clone)]
+pub struct SuffixOp {
+    pub kind: SuffixOpKind,
+}
+
+
+#[derive(Clone)]
+pub enum PrefixOpKind {
+    /// `+`
+    Positive,
+    /// `-`
+    Negative,
+    /// `!`
+    Not,
+    /// `'~`
+    BitNeg,
+}
+
+#[derive(Clone)]
+pub struct PrefixOp {
+    pub kind: PrefixOpKind,
+}
 
 #[derive(Clone)]
 pub enum InfixOpKind {
@@ -97,8 +153,6 @@ pub enum InfixOpKind {
     ConcatLeft,
     /// `~>`
     ConcatRight,
-
-    Custom(CustomOp),
 }
 
 #[derive(Clone)]
@@ -151,8 +205,8 @@ impl InfixOpKind {
             BitOrAssign => "'|=",
             NullCoalescingAssign => "??=",
             ConcatLeft => "<~",
-            ConcatRight => "~>",
-            Custom(op) => op.as_str(),
+            ConcatRight => "~>"
         }
     }
 }
+

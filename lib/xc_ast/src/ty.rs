@@ -1,6 +1,6 @@
 use thin_vec::ThinVec;
 
-use crate::ptr::P;
+use crate::{expr::Expr, ptr::P};
 
 #[derive(Clone)]
 pub enum TypeKind {
@@ -19,6 +19,10 @@ pub enum TypeKind {
     Tuple(ThinVec<Type>),
     Object(ObjectType),
     Dict(P<Type>, P<Type>),
+
+    Paren(P<Type>),
+    Throw(P<Type>, P<Type>),
+    Typeof(P<Expr>)
 }
 
 #[derive(Clone)]

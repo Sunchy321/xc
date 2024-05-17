@@ -1,5 +1,6 @@
 pub mod lexer;
 pub mod error;
+pub mod tokentree;
 
 pub fn nfc_normalize(string: &str) -> String {
     use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};

@@ -4,7 +4,7 @@ use xc_span::Symbol;
 
 use crate::token::Token;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LiteralKind {
     Bool,
     Integer,
@@ -16,7 +16,7 @@ pub enum LiteralKind {
     Error
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Literal {
     pub kind: LiteralKind,
     pub value: Symbol,

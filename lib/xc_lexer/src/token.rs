@@ -281,7 +281,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn whitespace(&mut self) -> TokenKind {
-        debug_assert!(is_whitespace(self.prev()));
+        debug_assert!(is_whitespace(self.prev()) || self.prev() == '\'');
         self.eats(is_whitespace);
         Whitespace
     }
