@@ -57,9 +57,12 @@ impl Span {
         Self { lo: lo.0, hi: hi.0 }
     }
 
+    pub const DUMMY: Self = Self { lo: 0, hi: 0 };
+
     pub fn is_dummy(self) -> bool {
         self.lo == self.hi
     }
+
 }
 
 pub struct SessionGlobals {
