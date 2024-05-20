@@ -5,9 +5,9 @@ use xc_ast::tokenstream::{DelimSpacing, DelimSpan, Spacing, TokenTree, TokenTree
 
 #[derive(Clone)]
 pub(crate) struct TokenCursor {
-    tree_cursor: TokenTreeCursor,
+    pub(crate) tree_cursor: TokenTreeCursor,
 
-    stack: Vec<(TokenTreeCursor, Delimiter, DelimSpan, DelimSpacing)>,
+    pub(crate) stack: Vec<(TokenTreeCursor, Delimiter, DelimSpan, DelimSpacing)>,
 }
 
 impl TokenCursor {
@@ -15,7 +15,7 @@ impl TokenCursor {
         loop {
             if let Some(tree) = self.tree_cursor.next_ref() {
                 match tree {
-                    &TokenTree::Token(token, spacing) => {
+                    &TokenTree::Token(ref token, spacing) => {
                         debug_assert!(!matches!(
                             token.kind,
                             TokenKind::OpenDelim(..) | TokenKind::CloseDelim(..)
@@ -36,7 +36,7 @@ impl TokenCursor {
 
                         if delim != Delimiter::Invisible {
                             return (
-                                Token { kind: TokenKind::OpenDelim(delim), span:  span.open },
+                                Token { kind: TokenKind::OpenDelim(delim), span: span.open },
                                 spacing.open,
                             )
                         }

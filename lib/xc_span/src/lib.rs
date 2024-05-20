@@ -42,7 +42,7 @@ impl AddAssign for BytePos {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub lo: BytePos,
     pub hi: BytePos,
@@ -68,6 +68,14 @@ impl Span {
             cmp::min(self.lo, end.lo),
             cmp::max(self.lo, end.lo),
         )
+    }
+
+    pub fn with_hi(&self, hi: BytePos) -> Self {
+        Self::new(self.lo, hi)
+    }
+
+    pub fn shrink_to_hi(self) -> Self {
+        self.with_hi(self.hi)
     }
 }
 

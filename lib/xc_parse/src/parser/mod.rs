@@ -5,12 +5,22 @@ use xc_span::Symbol;
 pub mod cursor;
 
 pub mod parser;
+pub mod diag;
+
 pub mod expr;
 pub mod stmt;
 pub mod pat;
 pub mod ty;
 
-pub type PResult<T> = Result<T, Diagnostic>;
+pub type ParseResult<'a, T> = Result<T, Diagnostic<'a>>;
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct Restrictions: u16 {
+        const NO_STRUCT_LITERAL = 1 << 1;
+        const THEN_IS_KEYWORD = 1 << 2;
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum ExpectTokenKind {
@@ -34,6 +44,11 @@ pub enum HasTrailing {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Recovered {
+    Yes,
+    No,
+}
+
+pub(crate) enum ConsumeClosingDelim {
     Yes,
     No,
 }

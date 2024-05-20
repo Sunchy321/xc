@@ -1,14 +1,16 @@
 use thin_vec::ThinVec;
-use xc_span::Symbol;
+use xc_span::{Span, Symbol};
+use xc_error::ErrorGuaranteed;
 
 use crate::op::{ SuffixOp, PrefixOp, InfixOp};
 use crate::literal::Literal;
 use crate::pattern::Pattern;
 use crate::ptr::P;
-use crate::ty::Type;
+use crate::stmt::{Block, Cond};
+use crate::ty::{Type, TypeKind};
 
 #[derive(Clone)]
-pub enum PrimaryExpr {
+pub enum ExprKind {
     /// Paren (`(e)`)
     Paren(P<Expr>),
     /// A literal (`0`, `true`, `"hello"`, etc.)
@@ -27,11 +29,28 @@ pub enum PrimaryExpr {
     This,
     /// `$`
     Dollar,
-}
+    /// `$0`
+    LambdaArgUnnamed(u32),
+    /// `$id`
+    LambdaArgNamed(Symbol),
 
-#[derive(Clone)]
-pub enum ExprKind {
-    Primary(PrimaryExpr),
+    /// `{ some_expr }`
+    Block(P<Block>),
+    /// `if cond { then } else { else }`
+    If(P<Expr>, P<Expr>, Option<P<Expr>>),
+    /// `for pat in expr { body } else { else }`
+    For(P<Expr>, P<Expr>, P<Block>, Option<P<Block>>, ForLoopKind, Option<Symbol>),
+    /// `while cond { body } else { else }`
+    While(P<Expr>, P<Expr>, Option<P<Expr>>, Option<Symbol>),
+
+    /// `return expr`
+    Return(Option<P<Expr>>),
+    /// `throw expr`
+    Throw(Option<P<Expr>>),
+    /// `break expr`
+    Break(Option<P<Expr>>, Option<Symbol>),
+    /// `continue`
+    Continue(Option<Symbol>),
 
     /// Suffix exprs (`a?`)
     Suffix(SuffixOp, P<Expr>),
@@ -65,17 +84,41 @@ pub enum ExprKind {
     Increment(P<Expr>),
     /// Decrement (`a--`)
     Decrement(P<Expr>),
+
+    /// Error
+    Error(ErrorGuaranteed),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForLoopKind {
+    For,
+    ForAwait,
 }
 
 #[derive(Clone)]
 pub struct Expr {
     pub kind: ExprKind,
+    pub span: Span,
+}
+
+impl Expr {
+    pub fn to_type(&self) -> Option<P<Type>> {
+        use ExprKind::*;
+
+        let kind = match &self.kind {
+            Paren(e) => e.to_type().map(TypeKind::Paren)?,
+
+            _ => return None,
+        };
+
+        Some(P(Type { kind, span: self.span }))
+    }
 }
 
 #[derive(Clone)]
 pub enum ExprItem {
-    Expr(Expr),
-    ExpandExpr(Expr),
+    Expr(P<Expr>),
+    ExpandExpr(P<Expr>),
 }
 
 #[derive(Clone)]

@@ -50,13 +50,13 @@ impl TokenTreeCursor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spacing {
     Alone,
     Joint,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct DelimSpan {
     pub open: Span,
     pub close: Span,
@@ -75,7 +75,7 @@ impl DelimSpan {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DelimSpacing {
     pub open: Spacing,
     pub close: Spacing,

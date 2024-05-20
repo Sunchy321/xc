@@ -9,7 +9,7 @@ pub mod op {
     pub use crate::define::op_generated::*;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Symbol(pub(crate) u32);
 
 impl Symbol {
@@ -25,8 +25,12 @@ impl Symbol {
         with_session_globals(|g| Symbol::new(g.symbol_interner.intern(string)))
     }
 
+    pub fn is_keyword(self) -> bool {
+        self <= kw::While
+    }
+
     pub fn is_bool_lit(self) -> bool {
-        return self == kw::True || self == kw::False;
+        self == kw::True || self == kw::False
     }
 
     pub fn as_str(&self) -> &str {

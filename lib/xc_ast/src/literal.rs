@@ -16,7 +16,7 @@ pub enum LiteralKind {
     Error
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Literal {
     pub kind: LiteralKind,
     pub value: Symbol,

@@ -1,5 +1,5 @@
-use crate::{literal::Literal, op::Operator};
-use xc_span::{Identifier, Span, Symbol};
+use crate::{literal::Literal, ty::TypeKind};
+use xc_span::{symbol::kw::{self, Nil}, Identifier, Span, Symbol};
 
 #[derive(Clone)]
 pub enum CommentKind {
@@ -7,7 +7,7 @@ pub enum CommentKind {
     Block,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Delimiter {
     /// `(` `)`
     Paren,
@@ -69,7 +69,7 @@ pub enum TokenKind {
     Identifier(Symbol),
 
     LambdaArgUnnamed(u32),
-    LambdaArgNamed(String),
+    LambdaArgNamed(Symbol),
 
     Eof,
 }
@@ -93,10 +93,10 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn is_keyword(&self, key: Symbol) -> bool {
-        match self.to_identifier() {
-            Some(id) => id.name == key,
-            None => false,
+    pub fn dummy() -> Self {
+        Token {
+            kind: TokenKind::Eof,
+            span: Span::DUMMY,
         }
     }
 
@@ -106,4 +106,87 @@ impl Token {
             _ => None,
         }
     }
+
+    pub fn is_keyword(&self, key: Symbol) -> bool {
+        match self.to_identifier() {
+            Some(id) => id.name == key,
+            None => false,
+        }
+    }
+
+    pub fn can_begin_expr(&self) -> bool {
+        use TokenKind::*;
+
+        match self.kind {
+            At => false,
+            Pound => false,
+            Dollar => true,
+            Semicolon => false,
+            Colon => false,
+            Comma => false,
+
+            SymbolOpen => true,
+            ColonColon => true,
+            RightArrow => false,
+            FatArrow => false,
+            DotDotDot => false,
+
+            Op(..) => true,
+
+            OpenDelim(..) => true,
+            CloseDelim(..) => false,
+
+            Literal(..) => true,
+
+            Identifier(name) => ident_can_begin_expr(name),
+
+            LambdaArgUnnamed(..) => true,
+            LambdaArgNamed(..) => true,
+
+            Eof => false,
+        }
+    }
+
+    pub fn to_builtin_type(&self) -> Option<TypeKind> {
+        match self.kind {
+            TokenKind::Identifier(sym) => {
+                use TypeKind::*;
+
+                let kind = match sym {
+                    kw::Never => Never,
+                    kw::Void => Void,
+                    kw::Bool => Bool,
+                    kw::Int => Int(None, 0, 0),
+                    kw::Float => Float(None),
+                    kw::String => String,
+                    kw::Char => Char,
+                    _ => return None,
+                };
+
+                Some(kind)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn ident_can_begin_expr(name: Symbol) -> bool {
+    !name.is_keyword() || [
+        kw::Break,
+        kw::Continue,
+        kw::Do,
+        kw::False,
+        kw::For,
+        kw::If,
+        kw::Let,
+        kw::Match,
+        kw::Nil,
+        kw::Operator,
+        kw::Return,
+        kw::This,
+        kw::Throw,
+        kw::True,
+        kw::Try,
+        kw::While,
+    ].contains(&name)
 }

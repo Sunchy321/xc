@@ -4,13 +4,13 @@ use xc_error::diag::Diagnostic;
 
 use super::lexer::Lexer;
 
-pub struct TokenTreeReader<'src> {
-    lexer: Lexer<'src>,
+pub struct TokenTreeReader<'a, 'src> {
+    lexer: Lexer<'a, 'src>,
     token: Token,
 }
 
-impl<'src> TokenTreeReader<'src> {
-    fn parse_token_tree(&mut self, is_delimited: bool) -> (TokenStream, Spacing, Result<(), Vec<Diagnostic>>) {
+impl<'a, 'src> TokenTreeReader<'a, 'src> {
+    fn parse_token_tree(&mut self, is_delimited: bool) -> (TokenStream, Spacing, Result<(), Vec<Diagnostic<'a>>>) {
         let (_, open_spacing) = self.next();
 
         let mut buffer = Vec::new();
@@ -76,7 +76,7 @@ impl<'src> TokenTreeReader<'src> {
         (this_tok, spacing)
     }
 
-    fn parse_token_tree_with_delim(&mut self, open: Delimiter) -> Result<TokenTree, Vec<Diagnostic>> {
+    fn parse_token_tree_with_delim(&mut self, open: Delimiter) -> Result<TokenTree, Vec<Diagnostic<'a>>> {
         let pre_span = self.token.span;
 
         let (tts, open_spacing, res) = self.parse_token_tree(true);

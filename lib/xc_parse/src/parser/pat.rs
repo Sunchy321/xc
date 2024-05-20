@@ -1,5 +1,5 @@
 use super::parser::Parser;
 
-impl Parser {
-    
+impl<'a> Parser<'a> {
+
 }

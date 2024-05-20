@@ -2,7 +2,7 @@ use std::{ops::{Deref, DerefMut}, vec};
 
 use xc_span::Span;
 
-use crate::{diag_ctx::DiagnosticContext, level::Level, msg::DiagnosticMessage, MultiSpan};
+use crate::{diag_ctx::DiagnosticContext, level::Level, msg::{DiagnosticMessage, SubDiagnosticMessage}, ErrorGuaranteed, MultiSpan};
 
 pub struct Diagnostic<'a> {
     pub ctx: &'a DiagnosticContext,
@@ -67,9 +67,25 @@ impl<'a> Diagnostic<'a> {
             self
         }
     }
+
+    with! {
+        pub fn (span_label, with_span_label)(&mut self, span: Span, label: impl Into<SubDiagnosticMessage>) -> &mut Self {
+            let msg = self.sub_msg_to_main(label);
+            self.span.push_span_label(span, msg);
+            self
+        }
+    }
+
+    pub(crate) fn sub_msg_to_main(&self, sub: impl Into<SubDiagnosticMessage>) -> DiagnosticMessage {
+        self.deref().sub_msg_to_main(sub)
+    }
+
+    pub fn emit(self) -> ErrorGuaranteed {
+        unimplemented!()
+    }
 }
 
-struct DiagnosticInner {
+pub struct DiagnosticInner {
     pub(crate) level: Level,
 
     pub messages: Vec<DiagnosticMessage>,
@@ -86,5 +102,11 @@ impl DiagnosticInner {
             span: MultiSpan::new(),
             sort_span: Span::DUMMY
         }
+    }
+
+    fn sub_msg_to_main(&self, sub: impl Into<SubDiagnosticMessage>) -> DiagnosticMessage {
+        let msg = self.messages.iter().map(|m| m).next().expect("diagnostic with no message");
+
+        msg.with_sub(sub.into())
     }
 }

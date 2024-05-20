@@ -1,4 +1,5 @@
 use thin_vec::ThinVec;
+use xc_span::{Span, Symbol};
 
 use crate::{expr::Expr, ptr::P};
 
@@ -7,27 +8,33 @@ pub enum TypeKind {
     Void,
     Never,
     Bool,
-    Int(i8, i128, i128),
-    Float(i8),
-    String(String),
-    Symbol(String),
+    Int(Option<i8>, i128, i128),
+    Float(Option<i8>),
+    String,
+    Char,
+    SymbolType(Symbol),
 
     SelfType,
 
-    Nullable(P<Type>),
-    Array(P<Type>, usize),
-    Tuple(ThinVec<Type>),
+    Optional(P<Type>),
+    Array(P<Type>),
+    Tuple(ThinVec<P<Type>>),
     Object(ObjectType),
     Dict(P<Type>, P<Type>),
 
     Paren(P<Type>),
-    Throw(P<Type>, P<Type>),
-    Typeof(P<Expr>)
+    Result(P<Type>, P<Type>),
+    Typeof(P<Expr>),
+
+    SomeType(P<Type>),
+    AnyType(P<Type>),
+    Class(P<Type>),
 }
 
 #[derive(Clone)]
 pub struct Type {
     pub kind: TypeKind,
+    pub span: Span,
 }
 
 #[derive(Clone)]

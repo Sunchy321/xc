@@ -12,6 +12,7 @@ define_symbols! {
         Bool: "bool",
         Break: "break",
         Catch: "catch",
+        Char: "char",
         Class: "class",
         Cmp: "cmp",
         Const: "const",
@@ -66,6 +67,17 @@ define_symbols! {
         Uint: "uint",
         Void: "void",
         While: "while",
+
+        DidSet: "didSet",
+        Get: "get",
+        Infix: "infix",
+        Prefix: "prefix",
+        Root: "root",
+        Set: "set",
+        Suffix: "suffix",
+        Super: "super",
+        Then: "then",
+        WillSet: "willSet",
     }
 
     Operators {

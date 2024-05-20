@@ -2,16 +2,20 @@ use xc_ast::{literal::{Literal, LiteralKind}, token::*};
 use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_char, unescape_string}, Base};
 use xc_span::{BytePos, Span, Symbol};
 
+use crate::session::ParseSession;
+
 use super::nfc_normalize;
 
-pub struct Lexer<'src> {
+pub struct Lexer<'a, 'src> {
+    session: &'a ParseSession,
+
     src: &'src str,
     cursor: Cursor<'src>,
     start_pos: BytePos,
     pos: BytePos,
 }
 
-impl<'src> Lexer<'src> {
+impl<'a, 'src> Lexer<'a, 'src> {
     fn str_from(&self, start: BytePos) -> &'src str {
         self.str_from_to(start, self.pos)
     }
@@ -120,7 +124,7 @@ impl<'src> Lexer<'src> {
 
                     match id.parse::<u32>() {
                         Ok(n) => TokenKind::LambdaArgUnnamed(n),
-                        Err(_) => TokenKind::LambdaArgNamed(nfc_normalize(id)),
+                        Err(_) => TokenKind::LambdaArgNamed(Symbol::intern(nfc_normalize(id).as_str()) ),
                     }
                 },
 

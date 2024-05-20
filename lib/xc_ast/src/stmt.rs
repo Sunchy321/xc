@@ -1,4 +1,5 @@
 use thin_vec::ThinVec;
+use xc_span::Span;
 
 use crate::expr::Expr;
 use crate::literal::Literal;
@@ -31,6 +32,7 @@ pub enum StmtKind {
 #[derive(Clone)]
 pub struct Stmt {
     pub kind: StmtKind,
+    pub span: Span,
 }
 
 #[derive(Clone)]
@@ -42,6 +44,7 @@ pub enum Cond {
 #[derive(Clone)]
 pub struct Block {
     pub stmts: ThinVec<Stmt>,
+    pub span: Span,
 }
 
 #[derive(Clone)]
