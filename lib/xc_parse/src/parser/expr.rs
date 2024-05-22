@@ -56,6 +56,12 @@ impl<'a> Parser<'a> {
         // 3. convert as/is xxx into an operator
         let atoms = self.collect_atoms()?;
 
+        if atoms.is_empty() {
+            return Err(self.diag_ctx().create_error("unexpected token"));
+        }
+
+        // let xxx = atoms.windows(2).map(|v| {})
+
         // 4. process continuous primary exprs
         let atoms = once(None)
             .chain(atoms.iter().map(Some))
@@ -77,9 +83,7 @@ impl<'a> Parser<'a> {
                             Ok(FuncCall(Arguments::from_expr_items(t.clone()), thin_vec![]))
                         }
                         ExprKind::Block(b) => Ok(FuncCallTrailing(b.clone())),
-                        ExprKind::AnonEnumerator(symbol) => {
-                            Ok(MemberAccess(*symbol))
-                        }
+                        ExprKind::AnonEnumerator(symbol) => Ok(MemberAccess(*symbol)),
 
                         _ => Err(self
                             .diag_ctx()
@@ -89,7 +93,7 @@ impl<'a> Parser<'a> {
                     _ => unreachable!(),
                 }
             })
-            .collect::<Result::<Vec::<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         // combine func call and trailing blocks.
         let atoms = atoms.into_iter().fold(vec![], |mut v, a| {
@@ -103,14 +107,14 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                _ => v.push(a)
+                _ => v.push(a),
             }
 
             v
         });
 
         enum GroupedExprAtom {
-            Primary(ExprAtom),
+            Primary(P<Expr>),
             Ops(Vec<ExprAtom>),
         }
 
@@ -119,7 +123,7 @@ impl<'a> Parser<'a> {
             use ExprAtom::*;
 
             match a {
-                Primary(e) => v.push(GroupedExprAtom::Primary(a)),
+                Primary(e) => v.push(GroupedExprAtom::Primary(e)),
 
                 _ => {
                     if let Some(last_group) = v.last_mut() {
@@ -143,12 +147,14 @@ impl<'a> Parser<'a> {
 
         for (i, g) in grouped_atoms.iter_mut().enumerate() {
             match g {
-                GroupedExprAtom::Primary(..) => { },
+                GroupedExprAtom::Primary(..) => {}
                 GroupedExprAtom::Ops(mut ops) => {
                     // first operators must be prefix
                     if i == 0 {
                         if ops.iter().any(|a| !a.can_be_prefix_op()) {
-                            return Err(self.diag_ctx().create_error("non-prefix operator occurs at start of expression"));
+                            return Err(self.diag_ctx().create_error(
+                                "non-prefix operator occurs at start of expression",
+                            ));
                         }
 
                         ops = ops.iter().map(|a| a.force_prefix()).collect();
@@ -158,7 +164,9 @@ impl<'a> Parser<'a> {
                     // last operators must be suffix
                     if i == grouped_atoms.len() - 1 {
                         if ops.iter().any(|a| !a.can_be_suffix_op()) {
-                            return Err(self.diag_ctx().create_error("non-suffix operator occurs at end of expression"));
+                            return Err(self
+                                .diag_ctx()
+                                .create_error("non-suffix operator occurs at end of expression"));
                         }
 
                         ops = ops.iter().map(|a| a.force_suffix()).collect();
@@ -166,50 +174,54 @@ impl<'a> Parser<'a> {
                     }
 
                     let suffix_max_len = ops.iter().take_while(|a| a.can_be_suffix_op()).count();
-                    let prefix_max_len = ops.iter().rev().take_while(|a| a.can_be_prefix_op()).count();
+                    let prefix_max_len = ops
+                        .iter()
+                        .rev()
+                        .take_while(|a| a.can_be_prefix_op())
+                        .count();
 
                     if suffix_max_len + prefix_max_len + 1 < ops.len() {
-                        return Err(self.diag_ctx().create_error("cannot determine infix operator"));
+                        return Err(self
+                            .diag_ctx()
+                            .create_error("cannot determine infix operator"));
                     }
 
                     let mut possible_infix = vec![];
 
                     for i in suffix_max_len..ops.len() - prefix_max_len {
-                        if ops[0..i].into_iter().all(|a| a.can_be_prefix_op()) && ops[i+1..].into_iter().all(|a| a.can_be_suffix_op()) {
+                        if ops[0..i].into_iter().all(|a| a.can_be_prefix_op())
+                            && ops[i + 1..].into_iter().all(|a| a.can_be_suffix_op())
+                        {
                             possible_infix.push(i);
                         }
                     }
 
                     if possible_infix.len() == 0 {
-                        return Err(self.diag_ctx().create_error("cannot determine infix operator"));
+                        return Err(self
+                            .diag_ctx()
+                            .create_error("cannot determine infix operator"));
                     } else if possible_infix.len() > 1 {
                         return Err(self.diag_ctx().create_error("ambiguous infix operator"));
                     }
 
-                    ops = (0..ops.len()).into_iter().map(|i| {
-                        if i == possible_infix[0] {
-                            ops[i].force_infix()
-                        } else if i < possible_infix[0] {
-                            ops[i].force_prefix()
-                        } else {
-                            ops[i].force_suffix()
-                        }
-                    }).collect();
+                    ops = (0..ops.len())
+                        .into_iter()
+                        .map(|i| {
+                            if i == possible_infix[0] {
+                                ops[i].force_infix()
+                            } else if i < possible_infix[0] {
+                                ops[i].force_prefix()
+                            } else {
+                                ops[i].force_suffix()
+                            }
+                        })
+                        .collect();
                 }
             }
         }
 
-        let atoms = grouped_atoms.into_iter().flat_map(|g| {
-            match g {
-                GroupedExprAtom::Primary(a) => vec![a],
-                GroupedExprAtom::Ops(ops) => ops,
-            }
-        }).collect::<Vec<_>>();
-
         // 6. collect suffix and prefix operators
-        enum CollectedExprAtom {
-            Operand(P<Expr>),
-        }
+        let grouped_atoms =
 
         unimplemented!()
     }
