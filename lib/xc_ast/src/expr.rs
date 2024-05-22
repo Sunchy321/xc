@@ -1,9 +1,9 @@
 use thin_vec::ThinVec;
-use xc_span::{Span, Symbol};
 use xc_error::ErrorGuaranteed;
+use xc_span::{Span, Symbol};
 
-use crate::op::{ SuffixOp, PrefixOp, InfixOp};
 use crate::literal::Literal;
+use crate::op::{InfixOp, PrefixOp, SuffixOp};
 use crate::pattern::Pattern;
 use crate::ptr::P;
 use crate::stmt::{Block, Cond};
@@ -33,13 +33,22 @@ pub enum ExprKind {
     LambdaArgUnnamed(u32),
     /// `$id`
     LambdaArgNamed(Symbol),
+    /// `.Yes`
+    AnonEnumerator(Symbol),
 
     /// `{ some_expr }`
     Block(P<Block>),
     /// `if cond { then } else { else }`
     If(P<Expr>, P<Expr>, Option<P<Expr>>),
     /// `for pat in expr { body } else { else }`
-    For(P<Expr>, P<Expr>, P<Block>, Option<P<Block>>, ForLoopKind, Option<Symbol>),
+    For(
+        P<Expr>,
+        P<Expr>,
+        P<Block>,
+        Option<P<Block>>,
+        ForLoopKind,
+        Option<Symbol>,
+    ),
     /// `while cond { body } else { else }`
     While(P<Expr>, P<Expr>, Option<P<Expr>>, Option<Symbol>),
 
@@ -111,7 +120,10 @@ impl Expr {
             _ => return None,
         };
 
-        Some(P(Type { kind, span: self.span }))
+        Some(P(Type {
+            kind,
+            span: self.span,
+        }))
     }
 }
 
@@ -125,6 +137,29 @@ pub enum ExprItem {
 pub struct Arguments {
     pub unnamed_args: ThinVec<ExprItem>,
     pub named_args: ThinVec<(String, Expr)>,
+}
+
+impl Arguments {
+    pub fn new() -> Self {
+        Self {
+            unnamed_args: ThinVec::new(),
+            named_args: ThinVec::new(),
+        }
+    }
+
+    pub fn from_expr_items(exprs: ThinVec<ExprItem>) -> Self {
+        Self {
+            unnamed_args: exprs,
+            named_args: ThinVec::new(),
+        }
+    }
+
+    pub fn from_expr_list(exprs: ThinVec<P<Expr>>) -> Self {
+        Self {
+            unnamed_args: exprs.into_iter().map(|e| ExprItem::Expr(e)).collect(),
+            named_args: ThinVec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]

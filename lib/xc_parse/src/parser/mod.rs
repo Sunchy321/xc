@@ -19,6 +19,7 @@ bitflags::bitflags! {
     pub(crate) struct Restrictions: u16 {
         const NO_STRUCT_LITERAL = 1 << 1;
         const THEN_IS_KEYWORD = 1 << 2;
+        const IS_IN_LET = 1 << 3;
     }
 }
 

@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 #[derive(Clone)]
 pub struct P<T: ?Sized> {
@@ -46,5 +46,11 @@ impl<T: ?Sized> Deref for P<T> {
 
     fn deref(&self) -> &T {
         &self.ptr
+    }
+}
+
+impl<T: ?Sized> DerefMut for P<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.ptr
     }
 }
