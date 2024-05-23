@@ -9,7 +9,7 @@ pub mod op {
     pub use crate::define::op_generated::*;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Symbol(pub(crate) u32);
 
 impl Symbol {

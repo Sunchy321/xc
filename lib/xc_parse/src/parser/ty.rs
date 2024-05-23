@@ -73,7 +73,7 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.token.kind {
-                Op(sym) if sym == op::NullChain => {
+                Op(sym) if sym == op::Question => {
                     self.next();
                     let span = lo.to(self.prev_token.span);
                     ty = self.make_type(Optional(ty), span);

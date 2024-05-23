@@ -45,3 +45,9 @@ pub trait IntoDiagnostic<'a> {
     #[must_use]
     fn into_diag(self, ctx: &'a DiagnosticContext, level: Level) -> Diagnostic<'a>;
 }
+
+impl IntoDiagnostic<'_> for &str {
+    fn into_diag(self, ctx: &DiagnosticContext, level: Level) -> Diagnostic<'_> {
+        unimplemented!()
+    }
+}

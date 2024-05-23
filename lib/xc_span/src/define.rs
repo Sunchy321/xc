@@ -83,14 +83,14 @@ define_symbols! {
     Operators {
         Predecessor: "+!",
         Successor: "-!",
-        Not: "!",
+        Exclamation: "!",
         BitNegate: "'~",
-        NullChain: "?",
+        Question: "?",
         Multiply: "*",
         Divide: "/",
         Modulo: "%",
         Plus: "+",
-        Subtract: "-",
+        Minus: "-",
         BitAnd: "'&",
         BitXor: "'^",
         BitOr: "'|",
@@ -123,5 +123,7 @@ define_symbols! {
         Decrement: "--",
         ConcatLeft: "~>",
         ConcatRight: "<~",
+
+        NotIn: "!in",
     }
 }

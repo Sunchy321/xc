@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct P<T: ?Sized> {
     ptr: Box<T>,
 }

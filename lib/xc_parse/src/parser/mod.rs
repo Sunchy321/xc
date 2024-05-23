@@ -3,13 +3,14 @@ use xc_error::diag::Diagnostic;
 use xc_span::Symbol;
 
 pub mod cursor;
+pub mod op;
 
-pub mod parser;
 pub mod diag;
+pub mod parser;
 
 pub mod expr;
-pub mod stmt;
 pub mod pat;
+pub mod stmt;
 pub mod ty;
 
 pub type ParseResult<'a, T> = Result<T, Diagnostic<'a>>;
@@ -61,6 +62,9 @@ pub struct SequenceSeparator {
 
 impl SequenceSeparator {
     pub fn new(sep: TokenKind) -> Self {
-        Self { sep: Some(sep), allow_trailing: true }
+        Self {
+            sep: Some(sep),
+            allow_trailing: true,
+        }
     }
 }
