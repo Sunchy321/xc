@@ -1,4 +1,4 @@
-use xc_macros::define_symbols;
+use xc_macro::define_symbols;
 
 define_symbols! {
     Keywords {
