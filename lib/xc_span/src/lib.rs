@@ -1,6 +1,7 @@
 pub mod interner;
 pub mod symbol;
 pub mod define;
+pub mod source_map;
 
 pub use crate::symbol::Symbol;
 

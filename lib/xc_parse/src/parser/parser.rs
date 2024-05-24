@@ -1,9 +1,10 @@
 use std::mem;
+use std::path::Path;
 
 use thin_vec::ThinVec;
 use xc_ast::{literal::LiteralKind, token::{Delimiter, Token, TokenKind}, tokenstream::{Spacing, TokenTree}};
 use xc_error::diag::Diagnostic;
-use xc_span::Symbol;
+use xc_span::{Span, Symbol};
 
 use super::{cursor::TokenCursor, ConsumeClosingDelim, ExpectTokenKind, HasTrailing, ParseResult, Recovered, Restrictions, SequenceSeparator, TokenExpectType};
 
@@ -24,6 +25,14 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    pub fn from_file<'s>(session: &'s ParseSession, path: &Path, span: Option<Span>) -> Parser<'s> {
+        let source_file = session.source_map();
+
+        unimplemented!()
+    }
+
+
+
     pub(crate) fn with_res<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
         let old = self.restrictions;
         self.restrictions = res;
