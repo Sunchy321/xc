@@ -64,8 +64,10 @@ pub enum ExprKind {
     Suffix(Symbol, P<Expr>),
     /// Function calls (`foo(a, b, c)`)
     FuncCall(P<Expr>, Arguments, ThinVec<P<Block>>),
-    /// MemberAccess (`foo.bar`)
+    /// MemberAccess (`foo.bar` or `foo.0`)
     MemberAccess(P<Expr>, Symbol),
+    /// MemberDynamicAccess (`foo.('bar)`)
+    MemberDynamicAccess(P<Expr>, P<Expr>),
     /// Method calls (`foo.bar(a, b, c)`)
     MethodCall(Box<MethodCall>),
     /// Subscripting (`foo[bar]`)

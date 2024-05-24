@@ -4,6 +4,7 @@ use std::vec;
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
 use xc_ast::expr::{Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
+use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
 use xc_ast::token::{Delimiter, TokenKind};
@@ -502,7 +503,7 @@ impl<'a> Parser<'a> {
             Associativity::Left | Associativity::Right => { }
         }
 
-        let mut operands = operands.into_iter()
+        let operands = operands.into_iter()
             .try_fold(vec![], |mut v, exprs| {
                 let expr = self.process_expr_merge_infix(exprs)?;
                 v.push(expr);
@@ -537,9 +538,11 @@ impl<'a> Parser<'a> {
             (Associativity::Left, _) => {
                 assert!(operators.len() == operands.len() - 1);
 
-                let mut expr = operands.drain(..1).next().unwrap();
+                let mut iter = operands.into_iter();
 
-                for ((op, _), e) in operators.into_iter().zip(operands.into_iter()) {
+                let mut expr = iter.next().unwrap();
+
+                for ((op, _), e) in operators.into_iter().zip(iter) {
                     let span = expr.span.to(e.span);
 
                     let kind = ExprKind::Infix(op, thin_vec![expr, e]);
@@ -553,9 +556,11 @@ impl<'a> Parser<'a> {
             (Associativity::Right, _) => {
                 assert!(operators.len() == operands.len() - 1);
 
-                let mut expr = operands.pop().unwrap();
+                let mut iter = operands.into_iter().rev();
 
-                for ((op, _), e) in operators.into_iter().rev().zip(operands.into_iter().rev()) {
+                let mut expr = iter.next().unwrap();
+
+                for ((op, _), e) in operators.into_iter().rev().zip(iter) {
                     let span = e.span.to(expr.span);
 
                     let kind = ExprKind::Infix(op, thin_vec![e, expr]);
@@ -593,6 +598,10 @@ impl<'a> Parser<'a> {
                     expr = self.make_expr(ExprKind::MemberAccess(expr, symbol), span);
                 }
 
+                MemberDynamicAccess(e) => {
+                    expr = self.make_expr(ExprKind::MemberDynamicAccess(expr, e), span);
+                }
+
                 Cast(ty, cast_type) => {
                     expr = self.make_expr(ExprKind::Cast(expr, ty, cast_type), span);
                 }
@@ -622,6 +631,7 @@ impl<'a> Parser<'a> {
                 FuncCall(..) => unreachable!(),
                 FuncCallTrailing(..) => unreachable!(),
                 MemberAccess(..) => unreachable!(),
+                MemberDynamicAccess(..) => unreachable!(),
                 Cast(..) => unreachable!(),
                 DotAwait => unreachable!(),
 
@@ -713,14 +723,31 @@ impl<'a> Parser<'a> {
     fn parse_dot_part(&mut self) -> ParseResult<'a, ExprAtom> {
         let lo = self.prev_token.span;
 
-        match self.token.kind {
-            TokenKind::Identifier(sym) if sym == kw::Await => Ok(self.make_expr_atom(
+        let atom = match self.token.kind {
+            TokenKind::Identifier(sym) if sym == kw::Await => self.make_expr_atom(
                 ExprAtomKind::DotAwait,
                 lo.to(self.token.span),
-            )),
+            ),
+
+            TokenKind::Identifier(id) => self.make_expr_atom(
+                ExprAtomKind::MemberAccess(id),
+                lo.to(self.token.span),
+            ),
+
+            TokenKind::Literal(Literal { kind: LiteralKind::Integer, value: sym, .. }) => self.make_expr_atom(
+                ExprAtomKind::MemberAccess(sym),
+                lo.to(self.token.span)
+            ),
+
+            TokenKind::OpenDelim(Delimiter::Paren) => {
+                let expr = self.parse_expr_tuple_parens()?;
+                self.make_expr_atom(ExprAtomKind::MemberDynamicAccess(expr), lo.to(self.prev_token.span))
+            }
 
             _ => unimplemented!(),
-        }
+        };
+
+        Ok(atom)
     }
 
     fn parse_expr_primary(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -995,6 +1022,7 @@ pub enum ExprAtomKind {
     FuncCall(Arguments, ThinVec<P<Block>>),
     FuncCallTrailing(P<Block>),
     MemberAccess(Symbol),
+    MemberDynamicAccess(P<Expr>),
     Cast(P<Type>, CastType),
     DotAwait,
 
@@ -1077,6 +1105,7 @@ impl ExprAtom {
             FuncCallTrailing(..) => false,
             Subscript(..) => false,
             MemberAccess(..) => false,
+            MemberDynamicAccess(..) => false,
             Cast(..) => false,
             DotAwait => false,
 
@@ -1094,6 +1123,7 @@ impl ExprAtom {
             FuncCallTrailing(..) => false,
             Subscript(..) => true,
             MemberAccess(..) => true,
+            MemberDynamicAccess(..) => true,
             Cast(..) => true,
             DotAwait => true,
 
@@ -1116,6 +1146,7 @@ impl ExprAtom {
             FuncCallTrailing(..) => false,
             Subscript(..) => false,
             MemberAccess(..) => false,
+            MemberDynamicAccess(..) => false,
             Cast(..) => false,
             DotAwait => false,
 
@@ -1138,6 +1169,7 @@ impl ExprAtom {
             FuncCallTrailing(..) => false,
             Subscript(..) => false,
             MemberAccess(..) => false,
+            MemberDynamicAccess(..) => false,
             Cast(..) => false,
             DotAwait => false,
 
