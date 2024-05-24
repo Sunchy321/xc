@@ -3,7 +3,7 @@ use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::expr::{self, Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
+use xc_ast::expr::{Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
 use xc_ast::token::{Delimiter, TokenKind};
@@ -332,7 +332,7 @@ impl<'a> Parser<'a> {
         grouped_atoms
     }
 
-    fn process_expr_merge_infix(&self, grouped_atoms: Vec<ExprAtomGroup>) -> ParseResult<'a, P<Expr>> {
+    fn process_expr_merge_infix(&self, mut grouped_atoms: Vec<ExprAtomGroup>) -> ParseResult<'a, P<Expr>> {
         if grouped_atoms.len() == 1 {
             match grouped_atoms.pop().unwrap() {
                 ExprAtomGroup::Expr(expr) => return Ok(expr),
@@ -388,9 +388,9 @@ impl<'a> Parser<'a> {
 
         let (operators, operands): (Vec<_>, Vec<_>) = grouped_atoms.into_iter()
             .fold(vec![], |mut v, g| {
-                match g {
-                    ExprAtomGroup::Expr(expr) => match v.last() {
-                        Some(ExprAtomGroupInner::Operand(mut operands)) => {
+                match &g {
+                    ExprAtomGroup::Expr(..) => match v.last_mut() {
+                        Some(ExprAtomGroupInner::Operand(ref mut operands)) => {
                             operands.push(g);
                         }
 
@@ -398,14 +398,14 @@ impl<'a> Parser<'a> {
                     },
 
                     ExprAtomGroup::InfixOp(sym, span) => {
-                        let precedence = self.op_ctx().precedence(sym).unwrap();
+                        let precedence = self.op_ctx().precedence(*sym).unwrap();
 
                         if precedence == main_info.precedence {
-                            v.push(ExprAtomGroupInner::Operator(sym, span));
+                            v.push(ExprAtomGroupInner::Operator(sym.clone(), span.clone()));
                             v.push(ExprAtomGroupInner::Operand(vec![]));
                         } else {
-                            match v.last() {
-                                Some(ExprAtomGroupInner::Operand(mut operands)) => {
+                            match v.last_mut() {
+                                Some(ExprAtomGroupInner::Operand(ref mut operands)) => {
                                     operands.push(g);
                                 }
 
@@ -432,6 +432,9 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         }).collect_vec();
 
+        let mut is_comparison_chain = false;
+
+        // check associativity.
         match main_info.assoc {
             Associativity::None => {
                 if operators.len() > 1 {
@@ -440,20 +443,14 @@ impl<'a> Parser<'a> {
             }
 
             Associativity::Isolate => {
-                if operators.iter().any(|o| o.0 == operators[0].0) {
+                if operators.iter().any(|o| o.0 != operators[0].0) {
                     return Err(self.diag_ctx().create_error("isolated operators"));
                 }
             }
 
             Associativity::Comparison => {
                 enum ComparisonStyle {
-                    Cmp,
-                    NotEqual,
-                    NotLess,
-                    NotGreater,
-                    LessGreater,
-                    In,
-                    NotIn,
+                    Individual(Symbol),
 
                     LessChain,
                     GreaterChain,
@@ -462,21 +459,115 @@ impl<'a> Parser<'a> {
 
                 let mut style = None;
 
-                for (op, _) in operators {
-                    if op == kw::Equal {
+                for (op, _) in operators.iter() {
+                    if *op == op::Equal {
                         match style {
                             None => style = Some(ComparisonStyle::UnknownChain),
+                            Some(ComparisonStyle::LessChain | ComparisonStyle::GreaterChain | ComparisonStyle::UnknownChain) => { },
+                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                        }
+                    } if *op == op::Less || *op == op::LessEqual {
+                        match style {
+                            None | Some(ComparisonStyle::UnknownChain) => style = Some(ComparisonStyle::LessChain),
+                            Some(ComparisonStyle::LessChain) => { },
+                            Some(ComparisonStyle::GreaterChain) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                        }
+                    } else if *op == op::Greater || *op == op::GreaterEqual {
+                        match style {
+                            None | Some(ComparisonStyle::UnknownChain) => style = Some(ComparisonStyle::GreaterChain),
+                            Some(ComparisonStyle::GreaterChain) => { },
+                            Some(ComparisonStyle::LessChain) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                        }
+                    } else {
+                        match style {
+                            None => style = Some(ComparisonStyle::Individual(*op)),
+                            Some(ComparisonStyle::LessChain | ComparisonStyle::GreaterChain | ComparisonStyle::UnknownChain) =>
+                                return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            Some(ComparisonStyle::Individual(sym)) => {
+                                if sym != *op {
+                                    return Err(self.diag_ctx().create_error("invalid comparison operator"))
+                                }
+                            },
                         }
                     }
                 }
+
+                if matches!(style, Some(ComparisonStyle::UnknownChain | ComparisonStyle::LessChain | ComparisonStyle::GreaterChain)) {
+                    is_comparison_chain = true;
+                }
             }
+
+            Associativity::Left | Associativity::Right => { }
         }
 
-        unimplemented!()
-    }
+        let mut operands = operands.into_iter()
+            .try_fold(vec![], |mut v, exprs| {
+                let expr = self.process_expr_merge_infix(exprs)?;
+                v.push(expr);
+                Ok(v)
+            })?;
 
-    fn build_expr_tree() -> ExprAtomGroup {
-        unimplemented!()
+        let expr = match (main_info.assoc, is_comparison_chain) {
+            (Associativity::Comparison, false) | (Associativity::None | Associativity::Isolate, _) => {
+                let op = operators.into_iter().next().unwrap();
+
+                let lo = operands.first().unwrap().span;
+                let hi = operands.last().unwrap().span;
+
+                let span = lo.to(hi);
+
+                let kind = ExprKind::Infix(op.0, operands.into());
+
+                self.make_expr(kind, span)
+            }
+
+           (Associativity::Comparison, true) => {
+                let lo = operands.first().unwrap().span;
+                let hi = operands.last().unwrap().span;
+
+                let span = lo.to(hi);
+
+                let kind = ExprKind::Comparison(operators.iter().map(|o| o.0).collect(), operands.into());
+
+                self.make_expr(kind, span)
+            }
+
+            (Associativity::Left, _) => {
+                assert!(operators.len() == operands.len() - 1);
+
+                let mut expr = operands.drain(..1).next().unwrap();
+
+                for ((op, _), e) in operators.into_iter().zip(operands.into_iter()) {
+                    let span = expr.span.to(e.span);
+
+                    let kind = ExprKind::Infix(op, thin_vec![expr, e]);
+
+                    expr = self.make_expr(kind, span);
+                }
+
+                expr
+            }
+
+            (Associativity::Right, _) => {
+                assert!(operators.len() == operands.len() - 1);
+
+                let mut expr = operands.pop().unwrap();
+
+                for ((op, _), e) in operators.into_iter().rev().zip(operands.into_iter().rev()) {
+                    let span = e.span.to(expr.span);
+
+                    let kind = ExprKind::Infix(op, thin_vec![e, expr]);
+
+                    expr = self.make_expr(kind, span);
+                }
+
+                expr
+            }
+        };
+
+        Ok(expr)
     }
 
     fn make_suffix_expr(&self, mut expr: P<Expr>, suffixes: Vec<ExprAtom>) -> P<Expr> {
