@@ -7,7 +7,7 @@ pub use crate::symbol::Symbol;
 
 use std::{cmp, ops::{Add, AddAssign, Sub}};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BytePos(pub u32);
 
 impl BytePos {
@@ -43,7 +43,7 @@ impl AddAssign for BytePos {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub lo: BytePos,
     pub hi: BytePos,

@@ -12,6 +12,8 @@ pub mod expr;
 pub mod pat;
 pub mod stmt;
 pub mod ty;
+pub mod attr;
+pub mod module;
 
 pub type ParseResult<'a, T> = Result<T, Diagnostic<'a>>;
 

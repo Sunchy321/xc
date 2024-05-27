@@ -1,5 +1,7 @@
 pub mod ptr;
 
+pub mod ast;
+
 pub mod literal;
 pub mod token;
 
@@ -14,6 +16,7 @@ pub mod ty;
 
 pub mod stmt;
 
-pub mod ast;
+pub mod decl;
 
 pub mod tokenstream;
+mod attr;

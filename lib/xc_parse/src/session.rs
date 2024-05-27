@@ -14,7 +14,6 @@ pub struct ParseSession {
 
 impl ParseSession {
     pub fn new() -> Self {
-
         Self {
             diag_ctx: DiagnosticContext::new(),
             op_ctx: OpContext::new(),

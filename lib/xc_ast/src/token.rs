@@ -1,13 +1,13 @@
 use crate::{literal::Literal, ty::TypeKind};
-use xc_span::{symbol::kw::{self, Nil}, Identifier, Span, Symbol};
+use xc_span::{symbol::kw, Identifier, Span, Symbol};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CommentKind {
     Line,
     Block,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delimiter {
     /// `(` `)`
     Paren,
@@ -34,7 +34,7 @@ impl CustomOp {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TokenKind {
     /// @
     At,
@@ -86,7 +86,7 @@ impl TokenKind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,

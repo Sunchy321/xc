@@ -4,14 +4,14 @@ use xc_span::Span;
 
 use crate::token::{Delimiter, Token};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TokenTree {
     Token(Token, Spacing),
 
     Delimited(TokenStream, Delimiter, DelimSpan, DelimSpacing),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TokenStream(pub(crate) Rc<Vec<TokenTree>>);
 
 impl TokenStream {
@@ -56,7 +56,7 @@ pub enum Spacing {
     Joint,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DelimSpan {
     pub open: Span,
     pub close: Span,
@@ -75,7 +75,7 @@ impl DelimSpan {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DelimSpacing {
     pub open: Spacing,
     pub close: Spacing,

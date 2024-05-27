@@ -10,6 +10,10 @@ pub struct DiagnosticContext {
 }
 
 impl DiagnosticContext {
+    pub fn new() -> Self {
+        Self { inner: RefCell::new(DiagnosticContextInner::new()) }
+    }
+
     pub fn struct_error(&self, msg: impl Into<DiagnosticMessage>) -> Diagnostic<'_> {
         Diagnostic::new(self, Level::Error, msg)
     }
@@ -28,4 +32,10 @@ impl DiagnosticContext {
 }
 
 struct DiagnosticContextInner {
+}
+
+impl DiagnosticContextInner {
+    fn new() -> Self {
+        Self {}
+    }
 }
