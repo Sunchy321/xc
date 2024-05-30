@@ -15,25 +15,24 @@ pub mod parser;
 
 pub mod error;
 
-pub fn from_file<'s>(session: &'s ParseSession, path: &Path, span: Option<Span>) -> Parser<'s> {
+pub fn parser_from_file<'s>(session: &'s ParseSession, path: &Path, span: Option<Span>) -> Parser<'s> {
     let source_file = session.source_map();
 
     unimplemented!()
 }
 
-pub fn from_source_str<'a>(
+pub fn parser_from_source_str<'a>(
     session: &'a ParseSession,
     name: Filename,
     source: String,
-    span: Option<Span>,
 ) -> Parser<'a> {
     let source_file = session.source_map().new_source_file(name, source);
 
     // TODO: exception
-    unsafe { from_source_file(session, source_file).unwrap_unchecked() }
+    unsafe { parser_from_source_file(session, source_file).unwrap_unchecked() }
 }
 
-fn from_source_file<'a>(session: &'a ParseSession, source_file: Rc<SourceFile>) -> Result<Parser<'a>, Vec<Diagnostic<'a>>> {
+fn parser_from_source_file<'a>(session: &'a ParseSession, source_file: Rc<SourceFile>) -> Result<Parser<'a>, Vec<Diagnostic<'a>>> {
     let end_pos = source_file.end_pos();
     let stream = file_to_stream(session, source_file)?;
     let mut parser = stream_to_parser(session, stream);

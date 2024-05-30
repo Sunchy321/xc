@@ -1,4 +1,6 @@
-use std::{ops::{Deref, DerefMut}, vec};
+use std::vec;
+use std::ops::{Deref, DerefMut};
+use std::fmt;
 
 use xc_span::Span;
 
@@ -21,6 +23,12 @@ impl Deref for Diagnostic<'_> {
 impl DerefMut for Diagnostic<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.diag.as_mut().unwrap()
+    }
+}
+
+impl fmt::Debug for Diagnostic<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.diag.fmt(f)
     }
 }
 
@@ -85,6 +93,7 @@ impl<'a> Diagnostic<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct DiagnosticInner {
     pub(crate) level: Level,
 

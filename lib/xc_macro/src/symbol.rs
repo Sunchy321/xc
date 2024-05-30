@@ -117,6 +117,7 @@ fn parse_symbols_with_error(input: TokenStream) -> (TokenStream, Vec<syn::Error>
 
     let mut keyword_stream = quote! {};
     let mut operator_stream = quote! {};
+    let mut prefill_stream = quote! {};
     let mut entries = Entries::with_capacity(input.keywords.len() + input.operators.len());
 
     for keyword in input.keywords.iter() {
@@ -125,6 +126,9 @@ fn parse_symbols_with_error(input: TokenStream) -> (TokenStream, Vec<syn::Error>
 
         let idx = entries.insert(name.span(), &value.value(), &mut errors);
 
+        prefill_stream.extend(quote! {
+            #value,
+        });
         keyword_stream.extend(quote! {
             pub const #name: Symbol = Symbol::new(#idx);
         });
@@ -136,6 +140,9 @@ fn parse_symbols_with_error(input: TokenStream) -> (TokenStream, Vec<syn::Error>
 
         let idx = entries.insert(name.span(), &value.value(), &mut errors);
 
+        prefill_stream.extend(quote! {
+            #value,
+        });
         operator_stream.extend(quote! {
             pub const #name: Symbol = Symbol::new(#idx);
         });
@@ -154,6 +161,14 @@ fn parse_symbols_with_error(input: TokenStream) -> (TokenStream, Vec<syn::Error>
         pub(crate) mod op_generated {
             use crate::Symbol;
             #operator_stream
+        }
+
+        impl Interner {
+            pub(crate) fn fresh() -> Self {
+                Interner::prefill(&[
+                    #prefill_stream
+                ])
+            }
         }
     };
 

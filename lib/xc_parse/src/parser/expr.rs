@@ -99,7 +99,7 @@ impl<'a> Parser<'a> {
         let atoms = atoms
             .iter()
             .enumerate()
-            .map(|(i, a)| (atoms.get(i), a))
+            .map(|(i, a)| (if i == 0 { None } else { atoms.get(i - 1) }, a))
             .map(|(p, a)| {
                 // if not two adjacent primary expr, continue
                 if !p.is_some_and(|p| p.can_be_primary_expr(self.op_ctx())) || !a.can_be_primary_expr(self.op_ctx()) {
@@ -223,6 +223,8 @@ impl<'a> Parser<'a> {
 
                             vec![ExprAtomGroup::SuffixOp(ops)]
                         } else {
+                            let len = ops.len();
+
                             let suffix_max_len =
                                 ops.iter().take_while(|a| a.can_be_suffix_op(self.op_ctx())).count();
                             let prefix_max_len = ops
@@ -239,7 +241,10 @@ impl<'a> Parser<'a> {
 
                             let mut possible_infix = vec![];
 
-                            for i in suffix_max_len..ops.len() - prefix_max_len {
+                            let infix_lo = if prefix_max_len == len { 0 } else { len - prefix_max_len - 1 };
+                            let infix_hi = if suffix_max_len == len { len } else { suffix_max_len + 1 };
+
+                            for i in infix_lo..infix_hi {
                                 if ops[0..i].into_iter().all(|a| a.can_be_prefix_op(self.op_ctx()))
                                     && ops[i + 1..].into_iter().all(|a| a.can_be_suffix_op(self.op_ctx()))
                                 {
@@ -268,9 +273,9 @@ impl<'a> Parser<'a> {
                             };
 
                             vec![
-                                ExprAtomGroup::PrefixOp(prefixes),
-                                ExprAtomGroup::InfixOp(infix.0, infix.1),
                                 ExprAtomGroup::SuffixOp(suffixes),
+                                ExprAtomGroup::InfixOp(infix.0, infix.1),
+                                ExprAtomGroup::PrefixOp(prefixes),
                             ]
                         }
                     }
@@ -356,6 +361,7 @@ impl<'a> Parser<'a> {
         let main_info = infos.into_iter()
             .fold(vec![], |maxes: Vec<OpInfo>, p| {
                 let mut less_than_some = false;
+                let mut equal_with_some = false;
 
                 let mut maxes = maxes.into_iter()
                     .filter(|v| match v.precedence.partial_cmp(&p.precedence, self.op_ctx()) {
@@ -364,12 +370,15 @@ impl<'a> Parser<'a> {
                             less_than_some = true;
                             true
                         },
-                        Some(Ordering::Equal) => true,
+                        Some(Ordering::Equal) => {
+                            equal_with_some = true;
+                            true
+                        },
                         Some(Ordering::Greater) => false,
                     })
                     .collect_vec();
 
-                if !less_than_some {
+                if !less_than_some && !equal_with_some {
                     maxes.push(p);
                 }
 
@@ -1014,7 +1023,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ExprAtomKind {
     Primary(P<Expr>),
 
@@ -1029,7 +1038,7 @@ pub enum ExprAtomKind {
     Op(Symbol, OpRole),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpRole {
     Unspecified,
     Prefix,
@@ -1037,7 +1046,7 @@ pub enum OpRole {
     Infix,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExprAtom {
     kind: ExprAtomKind,
     span: Span,

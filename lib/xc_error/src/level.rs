@@ -1,6 +1,8 @@
 use termcolor::{Color, ColorSpec};
 use self::Level::*;
 
+
+#[derive(Clone, Copy, Debug)]
 pub enum Level {
     Fatal,
     Error,

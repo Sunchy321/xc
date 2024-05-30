@@ -1,24 +1,24 @@
-use std::cell::RefCell;
+use std::{borrow::{Borrow, BorrowMut}, cell::RefCell};
+
+use bumpalo::Bump;
 
 use crate::Symbol;
 
 pub struct Interner(RefCell<InternerImpl>);
 
-impl Interner {
-    pub fn new() -> Self {
-        Interner(RefCell::new(InternerImpl {
-            alloc: bumpalo::Bump::new(),
-            strings: indexmap::IndexSet::new(),
-        }))
-    }
-}
-
 struct InternerImpl {
-    alloc: bumpalo::Bump,
+    arena: bumpalo::Bump,
     strings: indexmap::IndexSet<&'static str>,
 }
 
 impl Interner {
+    pub fn prefill(init: &[&'static str]) -> Self {
+        Self(RefCell::new(InternerImpl {
+            arena: Bump::new(),
+            strings: init.iter().copied().collect(),
+        }))
+    }
+
     pub fn intern(&self, string: &str) -> u32 {
         let mut interner = self.0.borrow_mut();
 
@@ -26,7 +26,7 @@ impl Interner {
             return idx as u32;
         }
 
-        let string: &str = interner.alloc.alloc(string);
+        let string: &str = interner.arena.alloc_str(string);
 
         let string: &'static str = unsafe { &*(string as *const str) };
 

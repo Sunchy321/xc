@@ -1,6 +1,7 @@
 use std::ops::{Deref, DerefMut};
+use std::fmt;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct P<T: ?Sized> {
     ptr: Box<T>,
 }
@@ -8,6 +9,12 @@ pub struct P<T: ?Sized> {
 #[allow(non_snake_case)]
 pub fn P<T: 'static>(value: T) -> P<T> {
     P { ptr: Box::new(value) }
+}
+
+impl<T: fmt::Debug> fmt::Debug for P<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
 }
 
 impl<T: 'static> P<T> {

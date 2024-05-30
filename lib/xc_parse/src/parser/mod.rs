@@ -15,6 +15,8 @@ pub mod ty;
 pub mod attr;
 pub mod module;
 
+pub mod tests;
+
 pub type ParseResult<'a, T> = Result<T, Diagnostic<'a>>;
 
 bitflags::bitflags! {

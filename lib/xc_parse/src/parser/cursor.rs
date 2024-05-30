@@ -2,6 +2,7 @@ use std::mem;
 
 use xc_ast::token::{Delimiter, Token, TokenKind};
 use xc_ast::tokenstream::{DelimSpacing, DelimSpan, Spacing, TokenTree, TokenTreeCursor};
+use xc_span::Span;
 
 #[derive(Clone)]
 pub(crate) struct TokenCursor {
@@ -42,6 +43,17 @@ impl TokenCursor {
                         }
                     }
                 }
+            } else if let Some((cursor, delim, span, spacing)) = self.stack.pop() {
+                self.tree_cursor = cursor;
+
+                if delim != Delimiter::Invisible {
+                    return (
+                        Token { kind: TokenKind::CloseDelim(delim), span: span.close },
+                        spacing.close
+                    );
+                }
+            } else {
+                return (Token { kind: TokenKind::Eof, span: Span::DUMMY }, Spacing::Alone);
             }
         }
     }

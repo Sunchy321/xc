@@ -12,6 +12,8 @@ use xc_span::Span;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ErrorGuaranteed(());
 
+
+#[derive(Clone, Debug)]
 pub struct MultiSpan {
     primary: Vec<Span>,
     labels: Vec<(Span, DiagnosticMessage)>,

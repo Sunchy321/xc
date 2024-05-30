@@ -145,7 +145,7 @@ where
 impl SessionGlobals {
     pub(crate) fn new() -> Self {
         Self {
-            symbol_interner: interner::Interner::new(),
+            symbol_interner: interner::Interner::fresh(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+#[derive(Clone, Debug)]
 pub enum DiagnosticMessage {
     String(Cow<'static, str>),
 }

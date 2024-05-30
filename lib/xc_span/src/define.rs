@@ -1,5 +1,7 @@
 use xc_macro::define_symbols;
 
+use crate::interner::Interner;
+
 define_symbols! {
     Keywords {
         Underscore: "_",
