@@ -52,9 +52,16 @@ pub enum Recovered {
     No,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ConsumeClosingDelim {
     Yes,
     No,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Case {
+    Sensitive,
+    Insensitive,
 }
 
 pub struct SequenceSeparator {

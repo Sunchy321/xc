@@ -6,7 +6,7 @@ use crate::literal::Literal;
 use crate::pattern::Pattern;
 use crate::ptr::P;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum StmtKind {
     Block(P<Block>, ThinVec<Catcher>, Option<Block>),
     If(P<Cond>, P<Expr>, Option<P<Expr>>),
@@ -29,25 +29,25 @@ pub enum StmtKind {
     Throw(Option<P<Expr>>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Cond {
     Expr(P<Expr>),
     Pattern(P<Pattern>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Block {
     pub stmts: ThinVec<Stmt>,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Catcher {
     pub pattern: Pattern,
     pub stmts: ThinVec<Stmt>,

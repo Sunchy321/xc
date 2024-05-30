@@ -65,6 +65,7 @@ define_symbols! {
         Type: "type",
         Typeof: "typeof",
         Uint: "uint",
+        Unsafe: "unsafe",
         Void: "void",
         While: "while",
 

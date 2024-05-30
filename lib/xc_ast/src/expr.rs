@@ -8,7 +8,7 @@ use crate::ptr::P;
 use crate::stmt::Block;
 use crate::ty::{Type, TypeKind};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ExprKind {
     /// Paren (`(e)`)
     Paren(P<Expr>),
@@ -105,7 +105,7 @@ pub enum ForLoopKind {
     ForAwait,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
@@ -128,13 +128,13 @@ impl Expr {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ExprItem {
     Expr(P<Expr>),
     ExpandExpr(P<Expr>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Arguments {
     pub unnamed_args: ThinVec<ExprItem>,
     pub named_args: ThinVec<(String, Expr)>,
@@ -163,15 +163,15 @@ impl Arguments {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MethodCall {
     pub receiver: P<Expr>,
     pub method_name: String,
     pub args: Arguments,
-    pub blocks: ThinVec<P<Block>>
+    pub blocks: ThinVec<P<Block>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CastType {
     Normal,
     Optional,

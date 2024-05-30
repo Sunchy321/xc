@@ -5,14 +5,14 @@ pub enum Operator {
     Prefix(PrefixOp),
     Suffix(SuffixOp),
     Infix(InfixOp),
-    Custom(Symbol)
+    Custom(Symbol),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug)]
 pub enum OperatorKind {
     Prefix,
     Suffix,
-    Infix
+    Infix,
 }
 
 #[derive(Clone)]
@@ -37,7 +37,6 @@ pub enum SuffixOpKind {
 pub struct SuffixOp {
     pub kind: SuffixOpKind,
 }
-
 
 #[derive(Clone)]
 pub enum PrefixOpKind {
@@ -205,8 +204,7 @@ impl InfixOpKind {
             BitOrAssign => "'|=",
             NullCoalescingAssign => "??=",
             ConcatLeft => "<~",
-            ConcatRight => "~>"
+            ConcatRight => "~>",
         }
     }
 }
-

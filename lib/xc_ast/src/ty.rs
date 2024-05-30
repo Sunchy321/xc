@@ -3,7 +3,7 @@ use xc_span::{Span, Symbol};
 
 use crate::{expr::Expr, ptr::P};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TypeKind {
     Void,
     Never,
@@ -31,18 +31,18 @@ pub enum TypeKind {
     Class(P<Type>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Type {
     pub kind: TypeKind,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ObjectType {
     pub fields: ThinVec<Field>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Field {
     pub name: String,
     pub type_id: P<Type>,

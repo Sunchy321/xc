@@ -1,12 +1,18 @@
 use std::mem;
-use std::path::Path;
 
 use thin_vec::ThinVec;
-use xc_ast::{literal::LiteralKind, token::{Delimiter, Token, TokenKind}, tokenstream::{Spacing, TokenTree}};
+use xc_ast::{
+    literal::LiteralKind,
+    token::{Delimiter, Token, TokenKind},
+    tokenstream::{Spacing, TokenStream, TokenTree},
+};
 use xc_error::diag::Diagnostic;
-use xc_span::{Span, Symbol};
+use xc_span::Symbol;
 
-use super::{cursor::TokenCursor, ConsumeClosingDelim, ExpectTokenKind, HasTrailing, ParseResult, Recovered, Restrictions, SequenceSeparator, TokenExpectType};
+use super::{
+    cursor::TokenCursor, Case, ConsumeClosingDelim, ExpectTokenKind, HasTrailing, ParseResult,
+    Recovered, Restrictions, SequenceSeparator, TokenExpectType,
+};
 
 use crate::session::ParseSession;
 
@@ -25,12 +31,30 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn from_file<'s>(session: &'s ParseSession, path: &Path, span: Option<Span>) -> Parser<'s> {
-        let source_file = session.source_map();
+    pub fn new(
+        session: &'a ParseSession,
+        stream: TokenStream,
+    ) -> Self {
+        let mut parser = Parser {
+            session,
+            token: Token::dummy(),
+            spacing: Spacing::Alone,
+            prev_token: Token::dummy(),
 
-        unimplemented!()
+            restrictions: Restrictions::empty(),
+            expected_tokens: Vec::new(),
+
+            token_cursor: TokenCursor {
+                tree_cursor: stream.into_trees(),
+                stack: Vec::new(),
+            },
+            next_call_count: 0,
+        };
+
+        parser.next();
+
+        parser
     }
-
 
 
     pub(crate) fn with_res<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -46,9 +70,7 @@ impl<'a> Parser<'a> {
         self.next_call_count += 1;
         // TODO: break token?
 
-        if next_token.0.span.is_dummy() {
-
-        }
+        if next_token.0.span.is_dummy() {}
 
         self.prev_token = mem::replace(&mut self.token, next_token.0);
         self.spacing = next_token.1;
@@ -67,27 +89,26 @@ impl<'a> Parser<'a> {
 
                 let all_normal = (0..dist).all(|i| {
                     let token = tree_curser.look_ahead(i);
-                    !matches!(token, Some(TokenTree::Delimited(_, Delimiter::Invisible, _, _)))
+                    !matches!(
+                        token,
+                        Some(TokenTree::Delimited(_, Delimiter::Invisible, _, _))
+                    )
                 });
 
                 if all_normal {
                     return match tree_curser.look_ahead(dist - 1) {
-                        Some(tree) => {
-                            match tree {
-                                TokenTree::Token(token, _) => looker(&token),
-                                TokenTree::Delimited(_, delim, dspan, _) => looker(&Token {
-                                    kind: OpenDelim(*delim),
-                                    span: dspan.open,
-                                })
-                            }
-                        }
-                        None => {
-                            looker(&Token {
-                                kind: CloseDelim(delim),
-                                span: span.close
-                            })
-                        }
-                    }
+                        Some(tree) => match tree {
+                            TokenTree::Token(token, _) => looker(&token),
+                            TokenTree::Delimited(_, delim, dspan, _) => looker(&Token {
+                                kind: OpenDelim(*delim),
+                                span: dspan.open,
+                            }),
+                        },
+                        None => looker(&Token {
+                            kind: CloseDelim(delim),
+                            span: span.close,
+                        }),
+                    };
                 }
             }
         }
@@ -99,7 +120,10 @@ impl<'a> Parser<'a> {
         while i < dist {
             token = cursor.next().0;
 
-            if matches!(token.kind, OpenDelim(Delimiter::Invisible) | CloseDelim(Delimiter::Invisible)) {
+            if matches!(
+                token.kind,
+                OpenDelim(Delimiter::Invisible) | CloseDelim(Delimiter::Invisible)
+            ) {
                 continue;
             }
 
@@ -139,22 +163,20 @@ impl<'a> Parser<'a> {
 
     pub fn eat_symbol(&mut self) -> Option<Symbol> {
         match self.token.kind {
-            TokenKind::Literal(lit) => {
-                match lit.kind {
-                    LiteralKind::SymbolLit => {
-                        self.next();
-                        Some(lit.value)
-                    }
-
-                    _ => None,
+            TokenKind::Literal(lit) => match lit.kind {
+                LiteralKind::SymbolLit => {
+                    self.next();
+                    Some(lit.value)
                 }
-            }
+
+                _ => None,
+            },
 
             _ => None,
         }
     }
 
-    pub fn consume_block(&mut self, delim: Delimiter, consume_close: ConsumeClosingDelim) {
+    pub(crate) fn consume_block(&mut self, delim: Delimiter, consume_close: ConsumeClosingDelim) {
         use TokenKind::*;
 
         let mut depth = 0;
@@ -185,7 +207,8 @@ impl<'a> Parser<'a> {
     pub fn check(&mut self, kind: &TokenKind) -> bool {
         let correct = self.token.kind == *kind;
         if !correct {
-            self.expected_tokens.push(ExpectTokenKind::Token(kind.clone()));
+            self.expected_tokens
+                .push(ExpectTokenKind::Token(kind.clone()));
         }
         correct
     }
@@ -197,6 +220,24 @@ impl<'a> Parser<'a> {
     pub fn check_keyword(&mut self, key: Symbol) -> bool {
         self.expected_tokens.push(ExpectTokenKind::Keyword(key));
         self.token.is_keyword(key)
+    }
+
+    pub fn check_keyword_case(&mut self, key: Symbol, case: Case) -> bool {
+        if self.check_keyword(key) {
+            return true;
+        }
+
+        if case == Case::Sensitive {
+            return false;
+        }
+
+        if let Some(ident) = self.token.to_identifier()
+            && ident.as_str().to_lowercase() == key.as_str().to_lowercase()
+        {
+            return true;
+        }
+
+        false
     }
 
     pub fn expect(&mut self, kind: &TokenKind) -> Result<Recovered, Diagnostic<'a>> {
@@ -215,7 +256,7 @@ impl<'a> Parser<'a> {
     pub fn expect_any_of(&mut self, kinds: &[&TokenKind], expect: TokenExpectType) -> bool {
         kinds.iter().any(|kind| match expect {
             TokenExpectType::Yes => self.check(kind),
-            TokenExpectType::No => self.check_noexpect(kind)
+            TokenExpectType::No => self.check_noexpect(kind),
         })
     }
 
@@ -226,12 +267,11 @@ impl<'a> Parser<'a> {
         self.parse_delim_comma_seq(Delimiter::Paren, f)
     }
 
-
     pub fn parse_delim_comma_seq<T>(
         &mut self,
         delim: Delimiter,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
-    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)>{
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
         self.parse_delim_seq(
             &TokenKind::OpenDelim(delim),
             &TokenKind::CloseDelim(delim),
@@ -246,7 +286,7 @@ impl<'a> Parser<'a> {
         ket: &TokenKind,
         sep: SequenceSeparator,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
-    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)>{
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
         self.expect(bra);
         self.parse_seq_to_end(ket, sep, f)
     }
@@ -256,7 +296,7 @@ impl<'a> Parser<'a> {
         end: &TokenKind,
         sep: SequenceSeparator,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
-    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)>{
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
         let (val, trailing, recovered) = self.parse_seq_before_end(end, sep, f)?;
 
         if matches!(recovered, Recovered::Yes) {
@@ -271,7 +311,7 @@ impl<'a> Parser<'a> {
         end: &TokenKind,
         sep: SequenceSeparator,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
-    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing, Recovered)>{
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing, Recovered)> {
         self.parse_seq_before(&[end], sep, TokenExpectType::Yes, f)
     }
 
@@ -281,7 +321,7 @@ impl<'a> Parser<'a> {
         sep: SequenceSeparator,
         expect: TokenExpectType,
         mut f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
-    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing, Recovered)>{
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing, Recovered)> {
         use TokenKind::*;
 
         let mut first = true;

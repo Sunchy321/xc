@@ -13,3 +13,11 @@ pub enum Base {
     Decimal,
     Hexadecimal
 }
+
+pub fn strip_shebang(input: &str) -> Option<usize> {
+    if let Some(input_tail) = input.strip_prefix("#!") {
+        Some(2 + input_tail.lines().next().unwrap_or_default().len())
+    } else {
+        None
+    }
+}

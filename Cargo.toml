@@ -10,3 +10,4 @@ edition = "2021"
 
 [dependencies]
 xc_parse = { version = "0.1.0", path = "lib/xc_parse" }
+xc_span = { version = "0.1.0", path = "lib/xc_span" }

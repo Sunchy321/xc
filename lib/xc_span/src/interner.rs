@@ -11,7 +11,6 @@ impl Interner {
             strings: indexmap::IndexSet::new(),
         }))
     }
-
 }
 
 struct InternerImpl {

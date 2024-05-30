@@ -16,7 +16,9 @@ pub mod ty;
 
 pub mod stmt;
 
+pub mod import;
 pub mod decl;
+pub mod module;
 
 pub mod tokenstream;
 mod attr;

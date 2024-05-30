@@ -10,6 +10,19 @@ pub struct TokenTreeReader<'a, 'src> {
 }
 
 impl<'a, 'src> TokenTreeReader<'a, 'src> {
+    pub(crate) fn parse_all_token_tree(
+        lexer: Lexer<'a, 'src>
+    ) -> (TokenStream, Result<(), Vec<Diagnostic<'a>>>) {
+        let mut reader = Self {
+            lexer,
+            token: Token::dummy()
+        };
+
+        let (stream, _spacing, res) = reader.parse_token_tree(false);
+
+        (stream, res)
+    }
+
     fn parse_token_tree(&mut self, is_delimited: bool) -> (TokenStream, Spacing, Result<(), Vec<Diagnostic<'a>>>) {
         let (_, open_spacing) = self.next();
 

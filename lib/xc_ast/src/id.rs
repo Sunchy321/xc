@@ -1,10 +1,11 @@
 use xc_span::Symbol;
 
-use crate::{expr::CastType, op::{Operator, OperatorKind}, ptr::P, ty::Type};
+use crate::expr::CastType;
+use crate::op::OperatorKind;
+use crate::ptr::P;
+use crate::ty::Type;
 
-
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum UnqualID {
     /// `foo`
     Identifier(Symbol),
@@ -28,9 +29,9 @@ pub enum UnqualID {
     OperatorAs(P<Type>, CastType),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OperatorID {
-    pub op: Operator,
+    pub op: Symbol,
     pub kind: OperatorKind,
     pub symbol: Symbol,
 }

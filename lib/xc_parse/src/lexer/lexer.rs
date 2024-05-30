@@ -1,18 +1,18 @@
 use xc_ast::{literal::{Literal, LiteralKind}, token::*};
 use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_char, unescape_string}, Base};
-use xc_span::{BytePos, Span, Symbol};
+use xc_span::{BytePos, Pos, Span, Symbol};
 
 use crate::session::ParseSession;
 
 use super::nfc_normalize;
 
 pub struct Lexer<'a, 'src> {
-    session: &'a ParseSession,
+    pub(crate) session: &'a ParseSession,
 
-    src: &'src str,
-    cursor: Cursor<'src>,
-    start_pos: BytePos,
-    pos: BytePos,
+    pub(crate) src: &'src str,
+    pub(crate) cursor: Cursor<'src>,
+    pub(crate) start_pos: BytePos,
+    pub(crate) pos: BytePos,
 }
 
 impl<'a, 'src> Lexer<'a, 'src> {
@@ -49,7 +49,7 @@ impl<'a, 'src> Lexer<'a, 'src> {
             let token = self.cursor.next_token();
             let start = self.pos;
 
-            self.pos += BytePos(token.len);
+            self.pos = self.pos + BytePos(token.len);
 
             let kind = match token.kind {
                 xc_lexer::TokenKind::LineComment => {
