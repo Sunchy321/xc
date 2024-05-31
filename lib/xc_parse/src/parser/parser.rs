@@ -1,4 +1,5 @@
-use std::mem;
+use core::slice;
+use std::{mem, sync::Arc};
 
 use thin_vec::ThinVec;
 use xc_ast::{
@@ -249,6 +250,21 @@ impl<'a> Parser<'a> {
                 unimplemented!()
             }
         } else {
+            self.expect_one_of(slice::from_ref(kind), &[])
+        }
+    }
+
+    pub fn expect_one_of(
+        &mut self,
+        edible: &[TokenKind],
+        inedible: &[TokenKind],
+    ) -> ParseResult<'a, Recovered> {
+        if edible.contains(&self.token.kind) {
+            self.next();
+            Ok(Recovered::No)
+        } else if inedible.contains(&self.token.kind) {
+            Ok(Recovered::No)
+        } else {
             unimplemented!()
         }
     }
@@ -299,7 +315,7 @@ impl<'a> Parser<'a> {
     ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
         let (val, trailing, recovered) = self.parse_seq_before_end(end, sep, f)?;
 
-        if matches!(recovered, Recovered::Yes) {
+        if matches!(recovered, Recovered::No) {
             self.eat(end);
         }
 
@@ -340,11 +356,11 @@ impl<'a> Parser<'a> {
                 } else {
                     match self.expect(t) {
                         Ok(Recovered::No) => {
-                            unimplemented!()
+                            // current closure?
                         }
                         Ok(Recovered::Yes) => {
                             recovered = Recovered::Yes;
-                            unimplemented!()
+                            break;
                         }
                         Err(mut err) => {
                             unimplemented!()

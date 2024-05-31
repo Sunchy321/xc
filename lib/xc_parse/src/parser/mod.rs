@@ -15,7 +15,8 @@ pub mod ty;
 pub mod attr;
 pub mod module;
 
-pub mod tests;
+#[cfg(test)]
+mod tests;
 
 pub type ParseResult<'a, T> = Result<T, Diagnostic<'a>>;
 

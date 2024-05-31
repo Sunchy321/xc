@@ -15,7 +15,7 @@ use xc_span::symbol::{kw, op};
 use xc_span::{Span, Symbol};
 
 use crate::parser::op::{Associativity, OpInfo};
-use crate::parser::SequenceSeparator;
+use crate::parser::{HasTrailing, SequenceSeparator};
 
 use super::op::OpContext;
 use super::parser::Parser;
@@ -799,7 +799,7 @@ impl<'a> Parser<'a> {
         let lo = self.token.span;
         self.expect(&OpenDelim(Delimiter::Paren))?;
 
-        let (exprs, _) = match self.parse_seq_to_end(
+        let (exprs, has_trailing) = match self.parse_seq_to_end(
             &CloseDelim(Delimiter::Paren),
             SequenceSeparator::new(Comma),
             |p| p.parse_expr_item(),
@@ -811,7 +811,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let kind = if exprs.len() == 1 {
+        let kind = if exprs.len() == 1 && !matches!(has_trailing, HasTrailing::Yes) {
             if let ExprItem::Expr(e) = exprs.iter().next().unwrap() {
                 ExprKind::Paren(e.clone())
             } else {
