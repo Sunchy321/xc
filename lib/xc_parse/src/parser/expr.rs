@@ -1,9 +1,10 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::expr::{Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
+use xc_ast::expr::{self, Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
 use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
@@ -768,6 +769,18 @@ impl<'a> Parser<'a> {
             self.next();
 
             let expr = self.make_expr(ExprKind::Literal(lit), lo);
+
+            Ok(expr)
+        } else if let LambdaArgNamed(sym) = self.token.kind {
+            self.next();
+
+            let expr = self.make_expr(ExprKind::LambdaArgNamed(sym), lo);
+
+            Ok(expr)
+        } else if let LambdaArgUnnamed(index) = self.token.kind {
+            self.next();
+
+            let expr = self.make_expr(ExprKind::LambdaArgUnnamed(index), lo);
 
             Ok(expr)
         } else if self.check(&OpenDelim(Delimiter::Paren)) {

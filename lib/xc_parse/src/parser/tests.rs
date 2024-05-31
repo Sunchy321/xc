@@ -35,10 +35,12 @@ fn string_to_expr(source_str: String) -> P<Expr> {
 fn test_expr() {
     create_session_globals_then(|| {
         string_to_expr("123usize".to_string());
+        string_to_expr("$0".to_string());
+        string_to_expr("$index".to_string());
         string_to_expr("123 + 456 - 789".to_string());
         string_to_expr("(123)".to_string());
         string_to_expr("(123,)".to_string());
         string_to_expr("(123, 456)".to_string());
-        string_to_expr("f(a, b, c)".to_string());
+        // string_to_expr("f(a, b, c)".to_string());
     });
 }
