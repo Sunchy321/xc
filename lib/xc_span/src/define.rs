@@ -4,6 +4,8 @@ use crate::interner::Interner;
 
 define_symbols! {
     Keywords {
+        PathRoot: "{{root}}",
+
         Underscore: "_",
 
         Any: "any",

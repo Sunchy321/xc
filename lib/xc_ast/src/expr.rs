@@ -1,8 +1,11 @@
+use core::fmt;
+
 use thin_vec::ThinVec;
 use xc_error::ErrorGuaranteed;
 use xc_span::{Span, Symbol};
 
 use crate::literal::Literal;
+use crate::path::Path;
 use crate::pattern::Pattern;
 use crate::ptr::P;
 use crate::stmt::Block;
@@ -14,6 +17,8 @@ pub enum ExprKind {
     Paren(P<Expr>),
     /// A literal (`0`, `true`, `"hello"`, etc.)
     Literal(Literal),
+    /// Path (`a::b`)
+    Path(Path),
     /// Array literal (`[1, 2, 3]`)
     Array(ThinVec<ExprItem>),
     /// Tuple literal (`(1, 2, 3)`)
@@ -105,7 +110,7 @@ pub enum ForLoopKind {
     ForAwait,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
@@ -125,6 +130,15 @@ impl Expr {
             kind,
             span: self.span,
         }))
+    }
+}
+
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = format!("Expr[{:?}..{:?}]", self.span.lo.0, self.span.hi.0);
+
+        write!(f, "{}", name)?;
+        fmt::Debug::fmt(&self.kind, f)
     }
 }
 

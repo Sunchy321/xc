@@ -7,6 +7,8 @@ pub mod token;
 
 pub mod op;
 
+pub mod path;
+
 pub mod expr;
 pub mod lambda;
 

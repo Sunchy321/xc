@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
-use std::sync::Arc;
 use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::expr::{self, Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
+use xc_ast::expr::{Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
 use xc_ast::literal::{Literal, LiteralKind};
+use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
 use xc_ast::token::{Delimiter, TokenKind};
@@ -783,6 +783,8 @@ impl<'a> Parser<'a> {
             let expr = self.make_expr(ExprKind::LambdaArgUnnamed(index), lo);
 
             Ok(expr)
+        } else if self.check_path() {
+            self.parse_expr_path()
         } else if self.check(&OpenDelim(Delimiter::Paren)) {
             self.parse_expr_tuple_parens()
         } else if self.eat_keyword(kw::If) {
@@ -804,6 +806,16 @@ impl<'a> Parser<'a> {
         } else {
             unimplemented!()
         }
+    }
+
+    fn parse_expr_path(&mut self) -> ParseResult<'a, P<Expr>> {
+        let path = self.parse_path(PathStyle::Expr)?;
+
+        let (span, kind) = (path.span, ExprKind::Path(path));
+
+        let expr = self.make_expr(kind, span);
+
+        self.maybe_recover_from_bad_qpath(expr)
     }
 
     fn parse_expr_tuple_parens(&mut self) -> ParseResult<'a, P<Expr>> {

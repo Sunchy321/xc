@@ -25,7 +25,7 @@ impl Symbol {
         with_session_globals(|g| Symbol::new(g.symbol_interner.intern(string)))
     }
 
-    pub fn is_keyword(self) -> bool {
+    pub fn is_reserved(self) -> bool {
         self <= kw::While
     }
 

@@ -107,6 +107,22 @@ impl Token {
         }
     }
 
+    pub fn is_identifier_and(&self, pred: impl FnOnce(Identifier) -> bool) -> bool {
+        self.to_identifier().map_or(false, pred)
+    }
+
+    pub fn is_reserved_ident(&self) -> bool {
+        self.is_identifier_and(|id| id.name.is_reserved())
+    }
+
+    pub fn is_path_start(&self) -> bool {
+        match self.kind {
+            TokenKind::ColonColon => true,
+            TokenKind::Identifier(_) => !self.is_reserved_ident(),
+            _ => false,
+        }
+    }
+
     pub fn is_keyword(&self, key: Symbol) -> bool {
         match self.to_identifier() {
             Some(id) => id.name == key,
@@ -171,22 +187,24 @@ impl Token {
 }
 
 fn ident_can_begin_expr(name: Symbol) -> bool {
-    !name.is_keyword() || [
-        kw::Break,
-        kw::Continue,
-        kw::Do,
-        kw::False,
-        kw::For,
-        kw::If,
-        kw::Let,
-        kw::Match,
-        kw::Nil,
-        kw::Operator,
-        kw::Return,
-        kw::This,
-        kw::Throw,
-        kw::True,
-        kw::Try,
-        kw::While,
-    ].contains(&name)
+    !name.is_reserved()
+        || [
+            kw::Break,
+            kw::Continue,
+            kw::Do,
+            kw::False,
+            kw::For,
+            kw::If,
+            kw::Let,
+            kw::Match,
+            kw::Nil,
+            kw::Operator,
+            kw::Return,
+            kw::This,
+            kw::Throw,
+            kw::True,
+            kw::Try,
+            kw::While,
+        ]
+        .contains(&name)
 }

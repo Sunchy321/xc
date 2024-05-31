@@ -8,6 +8,7 @@ pub mod op;
 pub mod diag;
 pub mod parser;
 
+pub mod path;
 pub mod expr;
 pub mod pat;
 pub mod stmt;
@@ -35,6 +36,7 @@ pub(crate) enum ExpectTokenKind {
     Keyword(Symbol),
     Operator,
     Identifier,
+    Path,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -1,14 +1,12 @@
 use core::slice;
-use std::{mem, sync::Arc};
+use std::{mem, sync::{mpsc::Receiver, Arc}};
 
 use thin_vec::ThinVec;
 use xc_ast::{
-    literal::LiteralKind,
-    token::{Delimiter, Token, TokenKind},
-    tokenstream::{Spacing, TokenStream, TokenTree},
+    id, literal::LiteralKind, token::{Delimiter, Token, TokenKind}, tokenstream::{Spacing, TokenStream, TokenTree}
 };
 use xc_error::diag::Diagnostic;
-use xc_span::Symbol;
+use xc_span::{Identifier, Symbol};
 
 use super::{
     cursor::TokenCursor, Case, ConsumeClosingDelim, ExpectTokenKind, HasTrailing, ParseResult,
@@ -218,6 +216,19 @@ impl<'a> Parser<'a> {
         self.token.kind == *kind
     }
 
+    pub(crate) fn check_or_expected(&mut self, ok: bool, kind: ExpectTokenKind) -> bool {
+        if ok {
+            true
+        } else {
+            self.expected_tokens.push(kind);
+            false
+        }
+    }
+
+    pub(crate) fn check_path (&mut self) -> bool {
+        self.check_or_expected(self.token.is_path_start(), ExpectTokenKind::Path)
+    }
+
     pub fn check_keyword(&mut self, key: Symbol) -> bool {
         self.expected_tokens.push(ExpectTokenKind::Keyword(key));
         self.token.is_keyword(key)
@@ -274,6 +285,32 @@ impl<'a> Parser<'a> {
             TokenExpectType::Yes => self.check(kind),
             TokenExpectType::No => self.check_noexpect(kind),
         })
+    }
+
+    pub(crate) fn expected_ident_found(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
+        todo!()
+    }
+
+    fn ident_or_error(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
+        match self.token.to_identifier() {
+            Some(ident) => Ok(ident),
+            None => self.expected_ident_found(recover),
+        }
+    }
+
+    fn parse_ident_impl(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
+        let ident = self.ident_or_error(recover)?;
+
+        if ident.is_reserved() {
+            todo!("error processing")
+        }
+
+        self.next();
+        Ok(ident)
+    }
+
+    pub fn parse_identifier(&mut self) -> ParseResult<'a, Identifier> {
+        self.parse_ident_impl(true)
     }
 
     pub fn parse_paren_comma_seq<T>(

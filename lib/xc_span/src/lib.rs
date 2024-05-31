@@ -7,6 +7,7 @@ pub mod symbol;
 
 pub use crate::symbol::Symbol;
 
+use core::fmt;
 use std::cmp;
 use std::ops::{Add, Sub};
 
@@ -82,7 +83,7 @@ impl_pos! {
     pub struct CharPos(pub u32);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub lo: BytePos,
     pub hi: BytePos,
@@ -110,12 +111,26 @@ impl Span {
         Span::new(cmp::min(self.lo, end.lo), cmp::max(self.lo, end.lo))
     }
 
+    pub fn with_lo(&self, lo: BytePos) -> Self {
+        Self::new(lo, self.hi)
+    }
+
     pub fn with_hi(&self, hi: BytePos) -> Self {
         Self::new(self.lo, hi)
     }
 
+    pub fn shrink_to_lo(self) -> Self {
+        self.with_hi(self.lo)
+    }
+
     pub fn shrink_to_hi(self) -> Self {
-        self.with_hi(self.hi)
+        self.with_lo(self.hi)
+    }
+}
+
+impl fmt::Debug for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Span({:?}..{:?})", self.lo, self.hi)
     }
 }
 
@@ -163,5 +178,9 @@ impl Identifier {
 
     pub fn as_str(&self) -> &str {
         self.name.as_str()
+    }
+
+    pub fn is_reserved(&self) -> bool {
+        self.name.is_reserved()
     }
 }
