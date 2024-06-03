@@ -129,6 +129,9 @@ define_symbols! {
         ConcatLeft: "~>",
         ConcatRight: "<~",
 
+        AsQuestion: "as?",
+        AsExclamation: "as!",
+        NotIs: "!is",
         NotIn: "!in",
     }
 }

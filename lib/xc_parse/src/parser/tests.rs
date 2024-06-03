@@ -41,6 +41,6 @@ fn test_expr() {
         string_to_expr("(123)".to_string());
         string_to_expr("(123,)".to_string());
         string_to_expr("(123, 456)".to_string());
-        string_to_expr("f(a, b, c)".to_string());
+        string_to_expr("123(456, 789)".to_string());
     });
 }

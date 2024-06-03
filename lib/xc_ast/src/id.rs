@@ -1,7 +1,6 @@
 use xc_span::Symbol;
 
 use crate::expr::CastType;
-use crate::op::OperatorKind;
 use crate::ptr::P;
 use crate::ty::Type;
 
@@ -27,6 +26,13 @@ pub enum UnqualID {
     OperatorIs(P<Type>),
     /// `operator as int`
     OperatorAs(P<Type>, CastType),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum OperatorKind {
+    Prefix,
+    Suffix,
+    Infix,
 }
 
 #[derive(Clone, Debug)]
