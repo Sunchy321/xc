@@ -5,8 +5,6 @@ pub mod ast;
 pub mod literal;
 pub mod token;
 
-pub mod op;
-
 pub mod path;
 
 pub mod expr;
