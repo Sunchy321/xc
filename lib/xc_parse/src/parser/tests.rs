@@ -26,7 +26,7 @@ where
 fn string_to_expr(source_str: String) -> P<Expr> {
     check_parse(source_str, &session(), |p| {
         let expr = p.parse_expr()?;
-        println!("{:?}", expr);
+        println!("{:#?}", expr);
         Ok(expr)
     })
 }
@@ -42,5 +42,8 @@ fn test_expr() {
         string_to_expr("(123,)".to_string());
         string_to_expr("(123, 456)".to_string());
         string_to_expr("123(456, 789)".to_string());
+        string_to_expr("if 1 then 2".to_string());
+        string_to_expr("if 1 then 2 else 3".to_string());
+        string_to_expr("if 1 then 2 else if 3 then 4 else 5".to_string());
     });
 }

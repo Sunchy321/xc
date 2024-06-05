@@ -35,6 +35,26 @@ impl<'a> Parser<'a> {
         &self.session.op_ctx
     }
 
+    fn token_can_begin_expr(&self) -> bool {
+        use TokenKind::*;
+
+        if !self.token.can_begin_expr() {
+            false
+        } else {
+            match self.token.kind {
+                Identifier(sym) => {
+                    if sym == kw::Then && self.restrictions.contains(Restrictions::THEN_IS_KEYWORD) {
+                        return false;
+                    }
+                }
+
+                _ => {}
+            }
+
+            true
+        }
+    }
+
     pub(crate) fn make_expr(&self, kind: ExprKind, span: Span) -> P<Expr> {
         P(Expr { kind, span })
     }
@@ -667,56 +687,56 @@ impl<'a> Parser<'a> {
     fn collect_expr_atom(&mut self) -> ParseResult<'a, Option<ExprAtom>> {
         use TokenKind::*;
 
-        let atom = match self.token.kind {
-            At | Pound | Semicolon | Colon | Comma | RightArrow | FatArrow | DotDotDot => {
-                return Ok(None)
-            }
+        let atom = if !self.token_can_begin_expr() {
+            return Ok(None);
+        } else {
+            match self.token.kind {
+                OpenDelim(Delimiter::Invisible) => return Ok(None),
 
-            Dollar | SymbolOpen | ColonColon => self.make_expr_atom_primary()?,
-
-            OpenDelim(delim) => match delim {
-                Delimiter::Paren | Delimiter::Bracket | Delimiter::Brace | Delimiter::DictBound => {
-                    self.make_expr_atom_primary()?
-                }
-                Delimiter::Invisible => return Ok(None),
-            },
-
-            CloseDelim(_) => return Ok(None),
-
-            Literal(_) | Identifier(_) | LambdaArgNamed(_) | LambdaArgUnnamed(_) => {
-                self.make_expr_atom_primary()?
-            }
-
-            Eof => return Ok(None),
-
-            Op(op) => {
-                if !self.op_ctx().is_op(op) {
-                    return Err(self.diag_ctx().create_error("unknown operator"));
-                }
-
-                self.next();
-
-                // parse !in and !is.
-                match (self.prev_token.kind.clone(), self.token.kind.clone()) {
-                    (Op(first), Identifier(second)) => {
-                        if first == op::Exclamation
-                            && second == kw::In
-                            && matches!(self.spacing, Spacing::Joint)
-                        {
-                            let span = self.prev_token.span.to(self.token.span);
-                            self.next();
-                            return Ok(Some(self.make_expr_atom(ExprAtomKind::Op(op::NotIn, OpRole::Infix), span)));
-                        }
+                Op(op) => {
+                    if !self.op_ctx().is_op(op) {
+                        return Err(self.diag_ctx().create_error("unknown operator"));
                     }
 
-                    _ => {}
+                    self.next();
+
+                    macro_rules! combine_op {
+                        ($first_id:ident == $first:path, $second_id:ident == $second:path, $result:path) => {
+                            if $first_id == $first && $second_id == $second
+                                && matches!(self.spacing, Spacing::Joint)
+                            {
+                                let span = self.prev_token.span.to(self.token.span);
+                                self.next();
+                                return Ok(Some(self.make_expr_atom(ExprAtomKind::Op($result, OpRole::Infix), span)));
+                            }
+                        };
+                    }
+
+                    // parse !in and !is.
+                    match (self.prev_token.kind.clone(), self.token.kind.clone()) {
+                        (Op(first), Identifier(second)) => {
+                            combine_op!(first == op::Exclamation, second == kw::In, op::NotIn);
+                            combine_op!(first == op::Exclamation, second == kw::Is, op::NotIs);
+                        }
+
+                        (Identifier(first), Op(second)) => {
+                            combine_op!(first == kw::As, second == op::Question, op::AsQuestion);
+                            combine_op!(first == kw::As, second == op::Exclamation, op::AsExclamation);
+                        }
+
+                        _ => {}
+                    }
+
+                    return Ok(Some(self.make_expr_atom(
+                        ExprAtomKind::Op(op, OpRole::Unspecified),
+                        self.prev_token.span,
+                    )));
                 }
 
-                self.make_expr_atom(
-                    ExprAtomKind::Op(op, OpRole::Unspecified),
-                    self.prev_token.span,
-                )
+                _ => {}
             }
+
+            self.make_expr_atom_primary()?
         };
 
         Ok(Some(atom))
@@ -904,6 +924,8 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let mut with_then = false;
+
         let then_part = if self.token.is_keyword(kw::Else) {
             if let Some(block) = recover_block_from_cond(self) {
                 block
@@ -913,6 +935,8 @@ impl<'a> Parser<'a> {
                 self.make_expr_err(cond_span.shrink_to_hi(), guar)
             }
         } else if self.token.is_keyword(kw::Then) {
+            with_then = true;
+            self.next();
             self.parse_expr_impl()?
         } else {
             // TODO parse attributes
@@ -930,7 +954,7 @@ impl<'a> Parser<'a> {
         };
 
         let else_part = if self.eat_keyword(kw::Else) {
-            Some(self.parse_expr_else_part(true)?)
+            Some(self.parse_expr_else_part(if with_then { ElseKind::IfThen } else { ElseKind::If })?)
         } else {
             None
         };
@@ -972,7 +996,7 @@ impl<'a> Parser<'a> {
         })?;
 
         let else_part = if self.eat_keyword(kw::Else) {
-            Some(self.parse_expr_else_part(false)?)
+            Some(self.parse_expr_else_part(ElseKind::Loop)?)
         } else {
             None
         };
@@ -983,13 +1007,15 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn parse_expr_else_part(&mut self, if_expr: bool) -> ParseResult<'a, P<Expr>> {
+    fn parse_expr_else_part(&mut self, else_kind: ElseKind) -> ParseResult<'a, P<Expr>> {
         let else_span = self.prev_token.span;
 
-        let expr = if if_expr && self.eat_keyword(kw::If) {
+        let expr = if matches!(else_kind, ElseKind::If | ElseKind::IfThen) && self.eat_keyword(kw::If) {
             self.parse_expr_if()?
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
             self.parse_expr_block()?
+        } else if matches!(else_kind, ElseKind::IfThen) {
+            self.parse_expr()?
         } else {
             unimplemented!()
         };
@@ -1002,7 +1028,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_opt(&mut self) -> ParseResult<'a, Option<P<Expr>>> {
-        let expr = if self.token.can_begin_expr() {
+        use TokenKind::*;
+
+        let expr = if self.token_can_begin_expr() {
             Some(self.parse_expr()?)
         } else {
             None
@@ -1046,6 +1074,13 @@ impl<'a> Parser<'a> {
         let span = block.span;
         Ok(self.make_expr(ExprKind::Block(block), span))
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ElseKind {
+    If,
+    IfThen,
+    Loop
 }
 
 #[derive(Clone, Debug)]
