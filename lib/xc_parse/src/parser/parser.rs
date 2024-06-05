@@ -22,7 +22,7 @@ pub struct Parser<'a> {
     pub spacing: Spacing,
     pub prev_token: Token,
 
-    restrictions: Restrictions,
+    pub(crate) restrictions: Restrictions,
     expected_tokens: Vec<ExpectTokenKind>,
 
     token_cursor: TokenCursor,
@@ -225,7 +225,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(crate) fn check_path (&mut self) -> bool {
+    pub(crate) fn check_path(&mut self) -> bool {
         self.check_or_expected(self.token.is_path_start(), ExpectTokenKind::Path)
     }
 
