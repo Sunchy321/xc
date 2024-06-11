@@ -427,7 +427,6 @@ impl<'a> Cursor<'a> {
 
     fn char_symbol_op(&mut self) -> TokenKind {
         debug_assert!(self.prev() == '\'');
-        self.next();
 
         let kind = match self.peek() {
             '\\' => Char { terminated: self.character() },
