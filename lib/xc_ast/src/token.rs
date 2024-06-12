@@ -15,8 +15,6 @@ pub enum Delimiter {
     Bracket,
     /// `{` `}`
     Brace,
-    /// `{|` `|}`
-    DictBound,
 
     Invisible,
 }

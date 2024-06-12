@@ -101,8 +101,6 @@ impl<'a, 'src> Lexer<'a, 'src> {
                 xc_lexer::TokenKind::CloseBracket => TokenKind::CloseDelim(Delimiter::Bracket),
                 xc_lexer::TokenKind::OpenBrace => TokenKind::OpenDelim(Delimiter::Brace),
                 xc_lexer::TokenKind::CloseBrace => TokenKind::CloseDelim(Delimiter::Brace),
-                xc_lexer::TokenKind::OpenDict => TokenKind::OpenDelim(Delimiter::DictBound),
-                xc_lexer::TokenKind::CloseDict => TokenKind::CloseDelim(Delimiter::DictBound),
 
                 xc_lexer::TokenKind::At => TokenKind::At,
                 xc_lexer::TokenKind::Pound => TokenKind::Pound,

@@ -24,9 +24,9 @@ pub enum ExprKind {
     /// Tuple literal (`(1, 2, 3)`)
     Tuple(ThinVec<ExprItem>),
     /// Struct literal (`{a: 1, b: 2}`)
-    Struct(ThinVec<(Symbol, ExprItem)>),
-    /// Dictionary literal (`{| a: 1, b: 2 |}`)
-    Dict(ThinVec<(Symbol, ExprItem)>),
+    Struct(ThinVec<StructItem>),
+    /// Dictionary literal (`[ a: 1, b: 2 ]`)
+    Dict(ThinVec<DictItem>),
     /// `nil`
     Nil,
     /// `this`
@@ -44,6 +44,8 @@ pub enum ExprKind {
     Block(P<Block>),
     /// `if cond { then } else { else }`
     If(P<Expr>, P<Expr>, Option<P<Expr>>),
+    /// `match expr { pat => body }`
+    Match(P<Expr>, ThinVec<MatchArm>),
     /// `for pat in expr { body } else { else }`
     For(
         P<Expr>,
@@ -104,6 +106,14 @@ pub enum ExprKind {
     Error(ErrorGuaranteed),
 }
 
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pat: P<Pattern>,
+    pub guard: P<Expr>,
+    pub body: Option<P<Expr>>,
+    pub span: Span,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForLoopKind {
     For,
@@ -117,6 +127,19 @@ pub struct Expr {
 }
 
 impl Expr {
+    pub fn is_complete(&self) -> bool {
+        use ExprKind::*;
+
+        match self.kind {
+            Block(..) | If(..) | Match(..) | While(..) | For(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn require_semi_to_be_stmt(&self) -> bool {
+        !self.is_complete()
+    }
+
     pub fn to_type(&self) -> Option<P<Type>> {
         use ExprKind::*;
 
@@ -145,7 +168,20 @@ impl fmt::Debug for Expr {
 #[derive(Clone, Debug)]
 pub enum ExprItem {
     Expr(P<Expr>),
-    ExpandExpr(P<Expr>),
+    Expansion(P<Expr>),
+}
+
+#[derive(Clone, Debug)]
+pub enum StructItem {
+    Item(Symbol, P<Expr>),
+    Expansion(P<Expr>),
+}
+
+#[derive(Clone, Debug)]
+pub enum DictItem {
+    Item(Symbol, P<Expr>),
+    Expansion(P<Expr>),
+    ExpansionPair(P<Expr>, P<Expr>),
 }
 
 #[derive(Clone, Debug)]

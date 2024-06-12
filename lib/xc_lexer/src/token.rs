@@ -54,10 +54,6 @@ pub enum TokenKind {
     /// ,
     Comma,
 
-    /// {|
-    OpenDict,
-    /// |}
-    CloseDict,
     /// '(
     SymbolOpen,
     /// ::
@@ -153,6 +149,7 @@ impl<'a> Cursor<'a> {
             ']' => CloseBracket,
             ';' => Semicolon,
             ',' => Comma,
+            '{' => OpenBrace,
             '}' => CloseBrace,
 
             ':' => match self.peek() {
@@ -162,24 +159,6 @@ impl<'a> Cursor<'a> {
                 }
 
                 _ => Colon,
-            },
-
-            '{' => match self.peek() {
-                '|' => {
-                    self.next();
-                    OpenDict
-                }
-
-                _ => OpenBrace,
-            },
-
-            '|' => match self.peek() {
-                '}' => {
-                    self.next();
-                    CloseDict
-                }
-
-                _ => self.operator(first),
             },
 
             '$' => match self.peek() {
