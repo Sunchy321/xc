@@ -78,7 +78,7 @@ impl<'a> Parser<'a> {
             self.next();
             let expr = self.parse_expr_impl()?;
 
-            return Ok(ExprItem::ExpandExpr(expr));
+            return Ok(ExprItem::Expansion(expr));
         } else {
             let expr = self.parse_expr_impl()?;
 

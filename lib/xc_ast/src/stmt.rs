@@ -8,31 +8,28 @@ use crate::ptr::P;
 
 #[derive(Clone, Debug)]
 pub enum StmtKind {
-    Block(P<Block>, ThinVec<Catcher>, Option<Block>),
-    If(P<Cond>, P<Expr>, Option<P<Expr>>),
-    While {
-        label: Option<P<Literal>>,
-        cond: Cond,
-        block: P<Block>,
-        else_block: Option<P<Block>>,
-    },
-    For {
-        label: Option<P<Literal>>,
-        pat: P<Pattern>,
-        expr: P<Expr>,
-        block: P<Block>,
-        else_block: Option<P<Block>>,
-    },
-    Break(Option<P<Literal>>, Option<P<Expr>>),
-    Continue(Option<P<Literal>>, Option<P<Expr>>),
-    Return(Option<P<Expr>>),
-    Throw(Option<P<Expr>>),
+    Expr(P<Expr>),
+    ExprSemi(P<Expr>),
+    Empty
 }
 
 #[derive(Clone, Debug)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+}
+
+impl Stmt {
+    pub fn add_trailing_semicolon(mut self) -> Self {
+        use StmtKind::*;
+
+        self.kind = match self.kind {
+            Expr(expr) => ExprSemi(expr),
+            kind => kind
+        };
+
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
