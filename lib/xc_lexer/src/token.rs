@@ -291,6 +291,8 @@ impl<'a> Cursor<'a> {
                 break;
             }
 
+            self.next();
+
             op = new_op;
         }
 

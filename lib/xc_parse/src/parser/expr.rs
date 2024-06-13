@@ -1,9 +1,10 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::expr::{Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind};
+use xc_ast::expr::{self, Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind, StructItem};
 use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
@@ -21,7 +22,6 @@ use crate::parser::{HasTrailing, SequenceSeparator};
 use super::op::OpContext;
 use super::parser::Parser;
 use super::{ParseResult, Restrictions};
-
 
 enum ExprAtomGroup {
     Expr(P<Expr>),
@@ -43,7 +43,8 @@ impl<'a> Parser<'a> {
         } else {
             match self.token.kind {
                 Identifier(sym) => {
-                    if sym == kw::Then && self.restrictions.contains(Restrictions::THEN_IS_KEYWORD) {
+                    if sym == kw::Then && self.restrictions.contains(Restrictions::THEN_IS_KEYWORD)
+                    {
                         return false;
                     }
                 }
@@ -123,7 +124,9 @@ impl<'a> Parser<'a> {
             .map(|(i, a)| (if i == 0 { None } else { atoms.get(i - 1) }, a))
             .map(|(p, a)| {
                 // if not two adjacent primary expr, continue
-                if !p.is_some_and(|p| p.can_be_primary_expr(self.op_ctx())) || !a.can_be_primary_expr(self.op_ctx()) {
+                if !p.is_some_and(|p| p.can_be_primary_expr(self.op_ctx()))
+                    || !a.can_be_primary_expr(self.op_ctx())
+                {
                     return Ok(a.clone());
                 }
 
@@ -181,7 +184,10 @@ impl<'a> Parser<'a> {
 
     /// convert continuous operators into suffix, prefix and infix operators.
     /// collect atoms and add pesudo operators at start and end.
-    fn process_expr_cont_operators(&self, atoms: Vec<ExprAtom>) -> ParseResult<'a, Vec<ExprAtomGroup>> {
+    fn process_expr_cont_operators(
+        &self,
+        atoms: Vec<ExprAtom>,
+    ) -> ParseResult<'a, Vec<ExprAtomGroup>> {
         use ExprAtomKind::*;
 
         enum ExprAtomGroupInner {
@@ -218,94 +224,111 @@ impl<'a> Parser<'a> {
         let grouped_atoms_len = grouped_atoms.len();
 
         // [O] -> P I S, after that: (P? E S) I (P E S) I ... I (P E S?)
-        let mut grouped_atoms = grouped_atoms
-            .into_iter()
-            .enumerate()
-            .try_fold(vec![],|mut v, (i, g)| {
-                let a = match g {
-                    ExprAtomGroupInner::Primary(e) => vec![ExprAtomGroup::Expr(e)],
-                    ExprAtomGroupInner::Ops(mut ops) => {
-                        if i == 0 {
-                            // first operators must be prefix
-                            if ops.iter().any(|a| !a.can_be_prefix_op(self.op_ctx())) {
-                                return Err(self.diag_ctx().create_error(
-                                    "non-prefix operator occurs at start of expression",
-                                ));
-                            }
-
-                            vec![ExprAtomGroup::PrefixOp(ops)]
-                        } else if i == grouped_atoms_len - 1 {
-                            // last operators must be suffix
-                            if ops.iter().any(|a| !a.can_be_suffix_op(self.op_ctx())) {
-                                return Err(self.diag_ctx().create_error(
-                                    "non-suffix operator occurs at end of expression",
-                                ));
-                            }
-
-                            vec![ExprAtomGroup::SuffixOp(ops)]
-                        } else {
-                            let len = ops.len();
-
-                            let suffix_max_len =
-                                ops.iter().take_while(|a| a.can_be_suffix_op(self.op_ctx())).count();
-                            let prefix_max_len = ops
-                                .iter()
-                                .rev()
-                                .take_while(|a| a.can_be_prefix_op(self.op_ctx()))
-                                .count();
-
-                            if suffix_max_len + prefix_max_len + 1 < ops.len() {
-                                return Err(self
-                                    .diag_ctx()
-                                    .create_error("cannot determine infix operator"));
-                            }
-
-                            let mut possible_infix = vec![];
-
-                            let infix_lo = if prefix_max_len == len { 0 } else { len - prefix_max_len - 1 };
-                            let infix_hi = if suffix_max_len == len { len } else { suffix_max_len + 1 };
-
-                            for i in infix_lo..infix_hi {
-                                if ops[0..i].into_iter().all(|a| a.can_be_prefix_op(self.op_ctx()))
-                                    && ops[i + 1..].into_iter().all(|a| a.can_be_suffix_op(self.op_ctx()))
-                                {
-                                    possible_infix.push(i);
+        let mut grouped_atoms =
+            grouped_atoms
+                .into_iter()
+                .enumerate()
+                .try_fold(vec![], |mut v, (i, g)| {
+                    let a = match g {
+                        ExprAtomGroupInner::Primary(e) => vec![ExprAtomGroup::Expr(e)],
+                        ExprAtomGroupInner::Ops(mut ops) => {
+                            if i == 0 {
+                                // first operators must be prefix
+                                if ops.iter().any(|a| !a.can_be_prefix_op(self.op_ctx())) {
+                                    return Err(self.diag_ctx().create_error(
+                                        "non-prefix operator occurs at start of expression",
+                                    ));
                                 }
+
+                                vec![ExprAtomGroup::PrefixOp(ops)]
+                            } else if i == grouped_atoms_len - 1 {
+                                // last operators must be suffix
+                                if ops.iter().any(|a| !a.can_be_suffix_op(self.op_ctx())) {
+                                    return Err(self.diag_ctx().create_error(
+                                        "non-suffix operator occurs at end of expression",
+                                    ));
+                                }
+
+                                vec![ExprAtomGroup::SuffixOp(ops)]
+                            } else {
+                                let len = ops.len();
+
+                                let suffix_max_len = ops
+                                    .iter()
+                                    .take_while(|a| a.can_be_suffix_op(self.op_ctx()))
+                                    .count();
+                                let prefix_max_len = ops
+                                    .iter()
+                                    .rev()
+                                    .take_while(|a| a.can_be_prefix_op(self.op_ctx()))
+                                    .count();
+
+                                if suffix_max_len + prefix_max_len + 1 < ops.len() {
+                                    return Err(self
+                                        .diag_ctx()
+                                        .create_error("cannot determine infix operator"));
+                                }
+
+                                let mut possible_infix = vec![];
+
+                                let infix_lo = if prefix_max_len == len {
+                                    0
+                                } else {
+                                    len - prefix_max_len - 1
+                                };
+                                let infix_hi = if suffix_max_len == len {
+                                    len
+                                } else {
+                                    suffix_max_len + 1
+                                };
+
+                                for i in infix_lo..infix_hi {
+                                    if ops[0..i]
+                                        .into_iter()
+                                        .all(|a| a.can_be_prefix_op(self.op_ctx()))
+                                        && ops[i + 1..]
+                                            .into_iter()
+                                            .all(|a| a.can_be_suffix_op(self.op_ctx()))
+                                    {
+                                        possible_infix.push(i);
+                                    }
+                                }
+
+                                if possible_infix.len() == 0 {
+                                    return Err(self
+                                        .diag_ctx()
+                                        .create_error("cannot determine infix operator"));
+                                } else if possible_infix.len() > 1 {
+                                    return Err(self
+                                        .diag_ctx()
+                                        .create_error("ambiguous infix operator"));
+                                }
+
+                                let suffixes = ops.drain(..possible_infix[0]).collect();
+                                let prefixes = ops.drain(possible_infix[0] + 1..).collect();
+
+                                let infix = match ops.pop().unwrap() {
+                                    ExprAtom {
+                                        kind: Op(sym, _),
+                                        span,
+                                        ..
+                                    } => (sym, span),
+                                    _ => unreachable!(),
+                                };
+
+                                vec![
+                                    ExprAtomGroup::SuffixOp(suffixes),
+                                    ExprAtomGroup::InfixOp(infix.0, infix.1),
+                                    ExprAtomGroup::PrefixOp(prefixes),
+                                ]
                             }
-
-                            if possible_infix.len() == 0 {
-                                return Err(self
-                                    .diag_ctx()
-                                    .create_error("cannot determine infix operator"));
-                            } else if possible_infix.len() > 1 {
-                                return Err(self.diag_ctx().create_error("ambiguous infix operator"));
-                            }
-
-                            let suffixes = ops.drain(..possible_infix[0]).collect();
-                            let prefixes = ops.drain(possible_infix[0] + 1..).collect();
-
-                            let infix = match ops.pop().unwrap() {
-                                ExprAtom {
-                                    kind: Op(sym, _),
-                                    span,
-                                    ..
-                                } => (sym, span),
-                                _ => unreachable!(),
-                            };
-
-                            vec![
-                                ExprAtomGroup::SuffixOp(suffixes),
-                                ExprAtomGroup::InfixOp(infix.0, infix.1),
-                                ExprAtomGroup::PrefixOp(prefixes),
-                            ]
                         }
-                    }
-                };
+                    };
 
-                v.extend(a);
+                    v.extend(a);
 
-                Ok(v)
-            })?;
+                    Ok(v)
+                })?;
 
         // add pseudo prefix and suffix operators.
         // after that: (P E S) I (P E S) I ... I (P E S)
@@ -359,7 +382,10 @@ impl<'a> Parser<'a> {
         grouped_atoms
     }
 
-    fn process_expr_merge_infix(&self, mut grouped_atoms: Vec<ExprAtomGroup>) -> ParseResult<'a, P<Expr>> {
+    fn process_expr_merge_infix(
+        &self,
+        mut grouped_atoms: Vec<ExprAtomGroup>,
+    ) -> ParseResult<'a, P<Expr>> {
         if grouped_atoms.len() == 1 {
             match grouped_atoms.pop().unwrap() {
                 ExprAtomGroup::Expr(expr) => return Ok(expr),
@@ -379,35 +405,39 @@ impl<'a> Parser<'a> {
         // note because of operators without precedence, there may be multiple operators with lowest precedence.
         // == -> + -> *
         //    -> `some operators without precedence`
-        let main_info = infos.into_iter()
-            .fold(vec![], |maxes: Vec<OpInfo>, p| {
-                let mut less_than_some = false;
-                let mut equal_with_some = false;
+        let main_info = infos.into_iter().fold(vec![], |maxes: Vec<OpInfo>, p| {
+            let mut less_than_some = false;
+            let mut equal_with_some = false;
 
-                let mut maxes = maxes.into_iter()
-                    .filter(|v| match v.precedence.partial_cmp(&p.precedence, self.op_ctx()) {
+            let mut maxes = maxes
+                .into_iter()
+                .filter(
+                    |v| match v.precedence.partial_cmp(&p.precedence, self.op_ctx()) {
                         None => true,
                         Some(Ordering::Less) => {
                             less_than_some = true;
                             true
-                        },
+                        }
                         Some(Ordering::Equal) => {
                             equal_with_some = true;
                             true
-                        },
+                        }
                         Some(Ordering::Greater) => false,
-                    })
-                    .collect_vec();
+                    },
+                )
+                .collect_vec();
 
-                if !less_than_some && !equal_with_some {
-                    maxes.push(p);
-                }
+            if !less_than_some && !equal_with_some {
+                maxes.push(p);
+            }
 
-                maxes
-            });
+            maxes
+        });
 
         if main_info.len() > 1 {
-            return Err(self.diag_ctx().create_error("cannot mix operators without precedence with others"));
+            return Err(self
+                .diag_ctx()
+                .create_error("cannot mix operators without precedence with others"));
         }
 
         let main_info = main_info.into_iter().next().unwrap();
@@ -417,7 +447,8 @@ impl<'a> Parser<'a> {
             Operand(Vec<ExprAtomGroup>),
         }
 
-        let (operators, operands): (Vec<_>, Vec<_>) = grouped_atoms.into_iter()
+        let (operators, operands): (Vec<_>, Vec<_>) = grouped_atoms
+            .into_iter()
             .fold(vec![], |mut v, g| {
                 match &g {
                     ExprAtomGroup::Expr(..) => match v.last_mut() {
@@ -453,15 +484,21 @@ impl<'a> Parser<'a> {
             .into_iter()
             .partition(|g| matches!(g, ExprAtomGroupInner::Operator(..)));
 
-        let operators = operators.into_iter().map(|g| match g {
-            ExprAtomGroupInner::Operator(sym, span) => (sym, span),
-            _ => unreachable!(),
-        }).collect_vec();
+        let operators = operators
+            .into_iter()
+            .map(|g| match g {
+                ExprAtomGroupInner::Operator(sym, span) => (sym, span),
+                _ => unreachable!(),
+            })
+            .collect_vec();
 
-        let operands = operands.into_iter().map(|g| match g {
-            ExprAtomGroupInner::Operand(operands) => operands,
-            _ => unreachable!(),
-        }).collect_vec();
+        let operands = operands
+            .into_iter()
+            .map(|g| match g {
+                ExprAtomGroupInner::Operand(operands) => operands,
+                _ => unreachable!(),
+            })
+            .collect_vec();
 
         let mut is_comparison_chain = false;
 
@@ -494,54 +531,99 @@ impl<'a> Parser<'a> {
                     if *op == op::Equal {
                         match style {
                             None => style = Some(ComparisonStyle::UnknownChain),
-                            Some(ComparisonStyle::LessChain | ComparisonStyle::GreaterChain | ComparisonStyle::UnknownChain) => { },
-                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            Some(
+                                ComparisonStyle::LessChain
+                                | ComparisonStyle::GreaterChain
+                                | ComparisonStyle::UnknownChain,
+                            ) => {}
+                            Some(ComparisonStyle::Individual(..)) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
                         }
-                    } if *op == op::Less || *op == op::LessEqual {
+                    }
+                    if *op == op::Less || *op == op::LessEqual {
                         match style {
-                            None | Some(ComparisonStyle::UnknownChain) => style = Some(ComparisonStyle::LessChain),
-                            Some(ComparisonStyle::LessChain) => { },
-                            Some(ComparisonStyle::GreaterChain) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
-                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            None | Some(ComparisonStyle::UnknownChain) => {
+                                style = Some(ComparisonStyle::LessChain)
+                            }
+                            Some(ComparisonStyle::LessChain) => {}
+                            Some(ComparisonStyle::GreaterChain) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
+                            Some(ComparisonStyle::Individual(..)) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
                         }
                     } else if *op == op::Greater || *op == op::GreaterEqual {
                         match style {
-                            None | Some(ComparisonStyle::UnknownChain) => style = Some(ComparisonStyle::GreaterChain),
-                            Some(ComparisonStyle::GreaterChain) => { },
-                            Some(ComparisonStyle::LessChain) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
-                            Some(ComparisonStyle::Individual(..)) => return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            None | Some(ComparisonStyle::UnknownChain) => {
+                                style = Some(ComparisonStyle::GreaterChain)
+                            }
+                            Some(ComparisonStyle::GreaterChain) => {}
+                            Some(ComparisonStyle::LessChain) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
+                            Some(ComparisonStyle::Individual(..)) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
                         }
                     } else {
                         match style {
                             None => style = Some(ComparisonStyle::Individual(*op)),
-                            Some(ComparisonStyle::LessChain | ComparisonStyle::GreaterChain | ComparisonStyle::UnknownChain) =>
-                                return Err(self.diag_ctx().create_error("invalid comparison operator")),
+                            Some(
+                                ComparisonStyle::LessChain
+                                | ComparisonStyle::GreaterChain
+                                | ComparisonStyle::UnknownChain,
+                            ) => {
+                                return Err(self
+                                    .diag_ctx()
+                                    .create_error("invalid comparison operator"))
+                            }
                             Some(ComparisonStyle::Individual(sym)) => {
                                 if sym != *op {
-                                    return Err(self.diag_ctx().create_error("invalid comparison operator"))
+                                    return Err(self
+                                        .diag_ctx()
+                                        .create_error("invalid comparison operator"));
                                 }
-                            },
+                            }
                         }
                     }
                 }
 
-                if matches!(style, Some(ComparisonStyle::UnknownChain | ComparisonStyle::LessChain | ComparisonStyle::GreaterChain)) {
+                if matches!(
+                    style,
+                    Some(
+                        ComparisonStyle::UnknownChain
+                            | ComparisonStyle::LessChain
+                            | ComparisonStyle::GreaterChain
+                    )
+                ) {
                     is_comparison_chain = true;
                 }
             }
 
-            Associativity::Left | Associativity::Right => { }
+            Associativity::Left | Associativity::Right => {}
         }
 
-        let operands = operands.into_iter()
-            .try_fold(vec![], |mut v, exprs| {
-                let expr = self.process_expr_merge_infix(exprs)?;
-                v.push(expr);
-                Ok(v)
-            })?;
+        let operands = operands.into_iter().try_fold(vec![], |mut v, exprs| {
+            let expr = self.process_expr_merge_infix(exprs)?;
+            v.push(expr);
+            Ok(v)
+        })?;
 
         let expr = match (main_info.assoc, is_comparison_chain) {
-            (Associativity::Comparison, false) | (Associativity::None | Associativity::Isolate, _) => {
+            (Associativity::Comparison, false)
+            | (Associativity::None | Associativity::Isolate, _) => {
                 let op = operators.into_iter().next().unwrap();
 
                 let lo = operands.first().unwrap().span;
@@ -554,13 +636,14 @@ impl<'a> Parser<'a> {
                 self.make_expr(kind, span)
             }
 
-           (Associativity::Comparison, true) => {
+            (Associativity::Comparison, true) => {
                 let lo = operands.first().unwrap().span;
                 let hi = operands.last().unwrap().span;
 
                 let span = lo.to(hi);
 
-                let kind = ExprKind::Comparison(operators.iter().map(|o| o.0).collect(), operands.into());
+                let kind =
+                    ExprKind::Comparison(operators.iter().map(|o| o.0).collect(), operands.into());
 
                 self.make_expr(kind, span)
             }
@@ -702,12 +785,16 @@ impl<'a> Parser<'a> {
 
                     macro_rules! combine_op {
                         ($first_id:ident == $first:path, $second_id:ident == $second:path, $result:path) => {
-                            if $first_id == $first && $second_id == $second
+                            if $first_id == $first
+                                && $second_id == $second
                                 && matches!(self.spacing, Spacing::Joint)
                             {
                                 let span = self.prev_token.span.to(self.token.span);
                                 self.next();
-                                return Ok(Some(self.make_expr_atom(ExprAtomKind::Op($result, OpRole::Infix), span)));
+                                return Ok(Some(self.make_expr_atom(
+                                    ExprAtomKind::Op($result, OpRole::Infix),
+                                    span,
+                                )));
                             }
                         };
                     }
@@ -721,7 +808,11 @@ impl<'a> Parser<'a> {
 
                         (Identifier(first), Op(second)) => {
                             combine_op!(first == kw::As, second == op::Question, op::AsQuestion);
-                            combine_op!(first == kw::As, second == op::Exclamation, op::AsExclamation);
+                            combine_op!(
+                                first == kw::As,
+                                second == op::Exclamation,
+                                op::AsExclamation
+                            );
                         }
 
                         _ => {}
@@ -754,24 +845,26 @@ impl<'a> Parser<'a> {
         let lo = self.prev_token.span;
 
         let atom = match self.token.kind {
-            TokenKind::Identifier(sym) if sym == kw::Await => self.make_expr_atom(
-                ExprAtomKind::DotAwait,
-                lo.to(self.token.span),
-            ),
+            TokenKind::Identifier(sym) if sym == kw::Await => {
+                self.make_expr_atom(ExprAtomKind::DotAwait, lo.to(self.token.span))
+            }
 
-            TokenKind::Identifier(id) => self.make_expr_atom(
-                ExprAtomKind::MemberAccess(id),
-                lo.to(self.token.span),
-            ),
+            TokenKind::Identifier(id) => {
+                self.make_expr_atom(ExprAtomKind::MemberAccess(id), lo.to(self.token.span))
+            }
 
-            TokenKind::Literal(Literal { kind: LiteralKind::Integer, value: sym, .. }) => self.make_expr_atom(
-                ExprAtomKind::MemberAccess(sym),
-                lo.to(self.token.span)
-            ),
+            TokenKind::Literal(Literal {
+                kind: LiteralKind::Integer,
+                value: sym,
+                ..
+            }) => self.make_expr_atom(ExprAtomKind::MemberAccess(sym), lo.to(self.token.span)),
 
             TokenKind::OpenDelim(Delimiter::Paren) => {
                 let expr = self.parse_expr_tuple_parens()?;
-                self.make_expr_atom(ExprAtomKind::MemberDynamicAccess(expr), lo.to(self.prev_token.span))
+                self.make_expr_atom(
+                    ExprAtomKind::MemberDynamicAccess(expr),
+                    lo.to(self.prev_token.span),
+                )
             }
 
             _ => unimplemented!(),
@@ -807,6 +900,8 @@ impl<'a> Parser<'a> {
             self.parse_expr_path()
         } else if self.check(&OpenDelim(Delimiter::Paren)) {
             self.parse_expr_tuple_parens()
+        } else if self.check(&OpenDelim(Delimiter::Brace)) {
+            self.parse_expr_block_struct()
         } else if self.eat_keyword(kw::If) {
             self.parse_expr_if()
         } else if self.eat_keyword(kw::For) {
@@ -842,6 +937,7 @@ impl<'a> Parser<'a> {
         use TokenKind::*;
 
         let lo = self.token.span;
+
         self.expect(&OpenDelim(Delimiter::Paren))?;
 
         let (exprs, has_trailing) = match self.parse_seq_to_end(
@@ -871,6 +967,52 @@ impl<'a> Parser<'a> {
         self.maybe_recover_from_bad_qpath(expr)
     }
 
+    fn parse_expr_block_struct(&mut self) -> ParseResult<'a, P<Expr>> {
+        if self.look_ahead(1, |t| t.kind == TokenKind::DotDotDot) {
+            self.parse_struct_literal()
+        } else if self.look_ahead(1, |t| t.is_identifier())
+            && self.look_ahead(2, |t| t.kind == TokenKind::Colon)
+        {
+            self.parse_struct_literal()
+        } else {
+            self.parse_expr_block()
+        }
+    }
+
+    fn parse_struct_literal(&mut self) -> ParseResult<'a, P<Expr>> {
+        let lo = self.token.span;
+
+        let (items, _) =
+            self.parse_delim_comma_seq(Delimiter::Brace, |this| this.parse_struct_item())?;
+        let span = lo.to(self.prev_token.span);
+        let expr = self.make_expr(ExprKind::Struct(items), span);
+
+        Ok(expr)
+    }
+
+    fn parse_struct_item(&mut self) -> ParseResult<'a, StructItem> {
+        if self.token.kind == TokenKind::DotDotDot {
+            self.next();
+
+            let expr = self.parse_expr()?;
+
+            return Ok(StructItem::Expansion(expr));
+        }
+
+        if self.token.is_identifier() && self.look_ahead(1, |t| t.kind == TokenKind::Colon) {
+            let key = self.token.to_identifier().unwrap().name;
+
+            self.next();
+            self.next();
+
+            let expr = self.parse_expr()?;
+
+            return Ok(StructItem::Item(key, expr));
+        }
+
+        todo!()
+    }
+
     fn parse_expr_if(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
         let cond = self.parse_expr_cond(true)?;
@@ -898,7 +1040,9 @@ impl<'a> Parser<'a> {
 
         let mut recover_block_from_cond = |this: &mut Self| {
             let block = match &mut cond.kind {
-                ExprKind::Infix(_, exprs) if matches!(&exprs.last().unwrap().kind, ExprKind::Block(_)) => {
+                ExprKind::Infix(_, exprs)
+                    if matches!(&exprs.last().unwrap().kind, ExprKind::Block(_)) =>
+                {
                     unimplemented!()
                 }
 
@@ -954,7 +1098,11 @@ impl<'a> Parser<'a> {
         };
 
         let else_part = if self.eat_keyword(kw::Else) {
-            Some(self.parse_expr_else_part(if with_then { ElseKind::IfThen } else { ElseKind::If })?)
+            Some(self.parse_expr_else_part(if with_then {
+                ElseKind::IfThen
+            } else {
+                ElseKind::If
+            })?)
         } else {
             None
         };
@@ -1010,15 +1158,16 @@ impl<'a> Parser<'a> {
     fn parse_expr_else_part(&mut self, else_kind: ElseKind) -> ParseResult<'a, P<Expr>> {
         let else_span = self.prev_token.span;
 
-        let expr = if matches!(else_kind, ElseKind::If | ElseKind::IfThen) && self.eat_keyword(kw::If) {
-            self.parse_expr_if()?
-        } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
-            self.parse_expr_block()?
-        } else if matches!(else_kind, ElseKind::IfThen) {
-            self.parse_expr()?
-        } else {
-            unimplemented!()
-        };
+        let expr =
+            if matches!(else_kind, ElseKind::If | ElseKind::IfThen) && self.eat_keyword(kw::If) {
+                self.parse_expr_if()?
+            } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
+                self.parse_expr_block()?
+            } else if matches!(else_kind, ElseKind::IfThen) {
+                self.parse_expr()?
+            } else {
+                unimplemented!()
+            };
 
         Ok(expr)
     }
@@ -1080,7 +1229,7 @@ impl<'a> Parser<'a> {
 pub enum ElseKind {
     If,
     IfThen,
-    Loop
+    Loop,
 }
 
 #[derive(Clone, Debug)]
@@ -1120,7 +1269,10 @@ impl ExprAtom {
     pub fn new_primary(expr: P<Expr>) -> Self {
         let span = expr.span;
 
-        Self { kind: ExprAtomKind::Primary(expr), span }
+        Self {
+            kind: ExprAtomKind::Primary(expr),
+            span,
+        }
     }
 
     fn force(&mut self, role: OpRole) {

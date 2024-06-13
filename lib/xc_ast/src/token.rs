@@ -105,6 +105,10 @@ impl Token {
         }
     }
 
+    pub fn is_identifier(&self) -> bool {
+        self.to_identifier().is_some()
+    }
+
     pub fn is_identifier_and(&self, pred: impl FnOnce(Identifier) -> bool) -> bool {
         self.to_identifier().map_or(false, pred)
     }

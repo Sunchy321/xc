@@ -49,3 +49,15 @@ fn test_expr() {
         string_to_expr("throw 1".to_string());
     });
 }
+
+#[test]
+fn test_block() {
+    create_session_globals_then(|| {
+        string_to_expr("{ }".to_string());
+        string_to_expr("{ 1 }".to_string());
+        string_to_expr("{ 1; 2 }".to_string());
+        string_to_expr("{ 1 + 2 }".to_string());
+        string_to_expr("{ a: 1 }".to_string());
+        string_to_expr("{ ...1 }".to_string());
+    });
+}

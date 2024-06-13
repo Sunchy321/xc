@@ -83,6 +83,10 @@ define_symbols! {
         Super: "super",
         Then: "then",
         WillSet: "willSet",
+
+        RightArrow: "->",
+        FatArrow: "=>",
+        DotDotDot: "...",
     }
 
     Operators {

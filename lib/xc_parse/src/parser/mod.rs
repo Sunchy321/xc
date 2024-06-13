@@ -8,13 +8,13 @@ pub mod op;
 pub mod diag;
 pub mod parser;
 
-pub mod path;
+pub mod attr;
 pub mod expr;
+pub mod module;
 pub mod pat;
+pub mod path;
 pub mod stmt;
 pub mod ty;
-pub mod attr;
-pub mod module;
 
 #[cfg(test)]
 mod tests;
@@ -27,6 +27,7 @@ bitflags::bitflags! {
         const NO_STRUCT_LITERAL = 1 << 1;
         const THEN_IS_KEYWORD = 1 << 2;
         const IS_IN_LET = 1 << 3;
+        const STMT_EXPR = 1 << 4;
     }
 }
 
