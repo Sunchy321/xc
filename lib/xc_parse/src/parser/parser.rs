@@ -340,7 +340,7 @@ impl<'a> Parser<'a> {
         sep: SequenceSeparator,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
     ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
-        self.expect(bra);
+        self.expect(bra)?;
         self.parse_seq_to_end(ket, sep, f)
     }
 
