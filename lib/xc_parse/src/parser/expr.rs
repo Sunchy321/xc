@@ -902,6 +902,8 @@ impl<'a> Parser<'a> {
             self.parse_expr_tuple_parens()
         } else if self.check(&OpenDelim(Delimiter::Brace)) {
             self.parse_expr_block_struct()
+        } else if self.check(&OpenDelim(Delimiter::Bracket)) {
+            self.parse_expr_array_dict()
         } else if self.eat_keyword(kw::If) {
             self.parse_expr_if()
         } else if self.eat_keyword(kw::For) {
@@ -1011,6 +1013,40 @@ impl<'a> Parser<'a> {
         }
 
         todo!()
+    }
+
+    fn parse_expr_array_dict(&mut self) -> ParseResult<'a, P<Expr>> {
+        let lo = self.token.span;
+
+        self.next();
+
+        if self.token.kind == TokenKind::CloseDelim(Delimiter::Bracket) {
+            self.next();
+
+            let span = lo.to(self.prev_token.span);
+            let expr = self.make_expr(ExprKind::Array(thin_vec![]), span);
+
+            return Ok(expr);
+        }
+
+        if self.token.kind == TokenKind::Colon
+            && self.look_ahead(1, |t| t.kind == TokenKind::CloseDelim(Delimiter::Bracket)) {
+            self.next();
+            self.next();
+
+            let span = lo.to(self.prev_token.span);
+            let expr = self.make_expr(ExprKind::Dict(thin_vec![]), span);
+
+            return Ok(expr);
+        }
+
+        let items = self.parse_delim_comma_seq(Delimiter::Bracket, |this| this.parse_array_dict_item())?;
+
+        todo!()
+    }
+
+    fn parse_array_dict_item(&mut self) -> ParserResult<'a, ArrayDictItem> {
+
     }
 
     fn parse_expr_if(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -1402,4 +1438,11 @@ impl ExprAtom {
             },
         }
     }
+}
+
+#[derive(Clone, Debug)]
+enum ArrayDictItem {
+    Item(P<Expr>),
+    ItemPair(P<Expr>),
+    Expansion(P<Expr>),
 }
