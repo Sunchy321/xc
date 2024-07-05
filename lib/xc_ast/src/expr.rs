@@ -173,15 +173,14 @@ pub enum ExprItem {
 
 #[derive(Clone, Debug)]
 pub enum StructItem {
-    Item(Symbol, P<Expr>),
+    KeyValue(Symbol, P<Expr>),
     Expansion(P<Expr>),
 }
 
 #[derive(Clone, Debug)]
 pub enum DictItem {
-    Item(Symbol, P<Expr>),
+    KeyValue(P<Expr>, P<Expr>),
     Expansion(P<Expr>),
-    ExpansionPair(P<Expr>, P<Expr>),
 }
 
 #[derive(Clone, Debug)]

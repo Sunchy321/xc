@@ -4,7 +4,9 @@ use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::expr::{self, Arguments, CastType, Expr, ExprItem, ExprKind, ForLoopKind, StructItem};
+use xc_ast::expr::{
+    self, Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, StructItem,
+};
 use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
@@ -1009,7 +1011,7 @@ impl<'a> Parser<'a> {
 
             let expr = self.parse_expr()?;
 
-            return Ok(StructItem::Item(key, expr));
+            return Ok(StructItem::KeyValue(key, expr));
         }
 
         todo!()
@@ -1018,9 +1020,8 @@ impl<'a> Parser<'a> {
     fn parse_expr_array_dict(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.token.span;
 
-        self.next();
-
-        if self.token.kind == TokenKind::CloseDelim(Delimiter::Bracket) {
+        if self.look_ahead(1, |t| t.kind == TokenKind::CloseDelim(Delimiter::Bracket)) {
+            self.next();
             self.next();
 
             let span = lo.to(self.prev_token.span);
@@ -1029,8 +1030,10 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        if self.token.kind == TokenKind::Colon
-            && self.look_ahead(1, |t| t.kind == TokenKind::CloseDelim(Delimiter::Bracket)) {
+        if self.look_ahead(1, |t| t.kind == TokenKind::Colon)
+            && self.look_ahead(2, |t| t.kind == TokenKind::CloseDelim(Delimiter::Bracket))
+        {
+            self.next();
             self.next();
             self.next();
 
@@ -1040,13 +1043,117 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        let items = self.parse_delim_comma_seq(Delimiter::Bracket, |this| this.parse_array_dict_item())?;
+        let (items, _) =
+            self.parse_delim_comma_seq(Delimiter::Bracket, |this| this.parse_array_dict_item())?;
 
-        todo!()
+        #[derive(PartialEq, Eq)]
+        enum Kind {
+            Unknown,
+            Array,
+            Dict,
+            Conflict,
+        }
+
+        let mut kind = Kind::Unknown;
+
+        for item in items.iter() {
+            match item {
+                ArrayDictItem::Item(..) => {
+                    if kind == Kind::Unknown {
+                        kind = Kind::Array;
+                    } else if kind == Kind::Dict {
+                        kind = Kind::Conflict;
+                    }
+                }
+
+                ArrayDictItem::KeyValue(..) => {
+                    if kind == Kind::Unknown {
+                        kind = Kind::Dict;
+                    } else if kind == Kind::Array {
+                        kind = Kind::Conflict;
+                    }
+                }
+
+                ArrayDictItem::Expansion(..) => { }
+            }
+        }
+
+        match kind {
+            Kind::Array => {
+                let span = lo.to(self.prev_token.span);
+
+                let items = items
+                    .into_iter()
+                    .map(|item| match item {
+                        ArrayDictItem::Item(expr) => ExprItem::Expr(expr),
+                        ArrayDictItem::KeyValue(_, _) => unreachable!(),
+                        ArrayDictItem::Expansion(expr) => ExprItem::Expansion(expr),
+                    })
+                    .collect();
+
+                let expr = self.make_expr(ExprKind::Array(items), span);
+
+                Ok(expr)
+            }
+
+            Kind::Dict => {
+                let span = lo.to(self.prev_token.span);
+
+                let items = items
+                    .into_iter()
+                    .map(|item| match item {
+                        ArrayDictItem::Item(_) => unreachable!(),
+                        ArrayDictItem::KeyValue(key, value) => DictItem::KeyValue(key, value),
+                        ArrayDictItem::Expansion(expr) => DictItem::Expansion(expr),
+                    })
+                    .collect();
+
+                let expr = self.make_expr(ExprKind::Dict(items), span);
+
+                Ok(expr)
+            }
+
+            Kind::Conflict => {
+                todo!()
+            }
+
+            Kind::Unknown => {
+                let span = lo.to(self.prev_token.span);
+
+                let items = items
+                    .into_iter()
+                    .map(|item| match item {
+                        ArrayDictItem::Item(_) => unreachable!(),
+                        ArrayDictItem::KeyValue(_, _) => unreachable!(),
+                        ArrayDictItem::Expansion(expr) => ExprItem::Expansion(expr),
+                    })
+                    .collect();
+
+                let expr = self.make_expr(ExprKind::Array(items), span);
+
+                Ok(expr)
+            }
+        }
     }
 
-    fn parse_array_dict_item(&mut self) -> ParserResult<'a, ArrayDictItem> {
+    fn parse_array_dict_item(&mut self) -> ParseResult<'a, ArrayDictItem> {
+        if self.token.kind == TokenKind::DotDotDot {
+            self.next();
+            let expr = self.parse_expr()?;
 
+            return Ok(ArrayDictItem::Expansion(expr));
+        }
+
+        let expr = self.parse_expr()?;
+
+        if self.token.kind == TokenKind::Colon {
+            self.next();
+            let value = self.parse_expr()?;
+
+            return Ok(ArrayDictItem::KeyValue(expr, value));
+        }
+
+        return Ok(ArrayDictItem::Item(expr));
     }
 
     fn parse_expr_if(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -1443,6 +1550,6 @@ impl ExprAtom {
 #[derive(Clone, Debug)]
 enum ArrayDictItem {
     Item(P<Expr>),
-    ItemPair(P<Expr>),
+    KeyValue(P<Expr>, P<Expr>),
     Expansion(P<Expr>),
 }

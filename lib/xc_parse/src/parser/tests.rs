@@ -66,11 +66,11 @@ fn test_block() {
 fn test_array() {
     create_session_globals_then(|| {
         string_to_expr("[]".to_string());
-        string_to_expr("[:]".to_string());   
-        // string_to_expr("[1]".to_string());
-        // string_to_expr("[...a]".to_string());
-        // string_to_expr("[k:v]".to_string());
-        // string_to_expr("[k:v,...d]".to_string());
-        // string_to_expr("[...d,k:v]".to_string());
+        string_to_expr("[:]".to_string());
+        string_to_expr("[1]".to_string());
+        string_to_expr("[...a]".to_string());
+        string_to_expr("[k:v]".to_string());
+        string_to_expr("[k:v,...d]".to_string());
+        string_to_expr("[...d,k:v]".to_string());
     })
 }
