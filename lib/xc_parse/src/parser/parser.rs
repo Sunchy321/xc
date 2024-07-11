@@ -1,9 +1,15 @@
 use core::slice;
-use std::{mem, sync::{mpsc::Receiver, Arc}};
+use std::{
+    mem,
+    sync::{mpsc::Receiver, Arc},
+};
 
 use thin_vec::ThinVec;
 use xc_ast::{
-    id, literal::LiteralKind, token::{Delimiter, Token, TokenKind}, tokenstream::{Spacing, TokenStream, TokenTree}
+    id,
+    literal::LiteralKind,
+    token::{Delimiter, Token, TokenKind},
+    tokenstream::{Spacing, TokenStream, TokenTree},
 };
 use xc_error::diag::Diagnostic;
 use xc_span::{Identifier, Symbol};
@@ -30,10 +36,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(
-        session: &'a ParseSession,
-        stream: TokenStream,
-    ) -> Self {
+    pub fn new(session: &'a ParseSession, stream: TokenStream) -> Self {
         let mut parser = Parser {
             session,
             token: Token::dummy(),
@@ -54,7 +57,6 @@ impl<'a> Parser<'a> {
 
         parser
     }
-
 
     pub(crate) fn with_res<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
         let old = self.restrictions;
@@ -149,6 +151,23 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    pub fn eat_keyword_case(&mut self, key: Symbol, case: Case) -> bool {
+        if self.eat_keyword(key) {
+            return true;
+        }
+
+        if case == Case::Insensitive
+            && let Some(ident) = self.token.to_identifier()
+            && ident.as_str().to_lowercase() == key.as_str().to_lowercase()
+        {
+            // TODO: make error
+            self.next();
+            return true;
+        }
+
+        return false;
     }
 
     pub fn eat_keyword_noexpect(&mut self, key: Symbol) -> bool {

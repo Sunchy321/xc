@@ -74,3 +74,18 @@ fn test_array() {
         string_to_expr("[...d,k:v]".to_string());
     })
 }
+
+fn string_to_decl(source_str: String) {
+    check_parse(source_str, &session(), |p| {
+        let decl = p.parse_decl()?.unwrap();
+        println!("{:?}", decl);
+        Ok(decl)
+    });
+}
+
+#[test]
+fn test_import() {
+    create_session_globals_then(|| {
+        string_to_decl("import core.\"prelude\" : *, a, b, c, d as e, operator, operator+, operator prefix+;".to_string());
+    })
+}

@@ -1,6 +1,8 @@
 use thin_vec::ThinVec;
 use xc_span::{Identifier, Span, Symbol};
 
+use crate::id::OperatorKind;
+
 #[derive(Clone, Debug)]
 pub enum ImportPathSegmentKind {
     Ident(Identifier),
@@ -34,25 +36,23 @@ impl ImportPathSegment {
 }
 
 #[derive(Clone, Debug)]
-pub struct ImportPath {
-    pub segments: ThinVec<ImportPathSegment>,
-    pub span: Span,
+pub enum ImportKind {
+    Full,
+    Normal,
 }
-
-#[derive(Clone, Debug)]
-pub enum ImportKind {}
 
 #[derive(Clone, Debug)]
 pub enum ImportItem {
     Star,
-    Ident(Identifier),
-    Operator,
+    Ident(Identifier, Option<Identifier>),
+    OperatorAll,
+    Operator(Symbol, Option<OperatorKind>)
 }
 
 #[derive(Clone, Debug)]
 pub struct Import {
     pub kind: ImportKind,
-    pub path: ImportPath,
+    pub path: ThinVec<ImportPathSegment>,
     pub items: Option<ThinVec<ImportItem>>,
     pub span: Span,
 }

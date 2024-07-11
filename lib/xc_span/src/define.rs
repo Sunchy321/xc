@@ -90,6 +90,7 @@ define_symbols! {
     }
 
     Operators {
+        Dot: ".",
         Predecessor: "+!",
         Successor: "-!",
         Exclamation: "!",

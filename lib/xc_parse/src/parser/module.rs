@@ -2,12 +2,16 @@ use std::mem;
 
 use thin_vec::{thin_vec, ThinVec};
 use xc_ast::decl::{Decl, DeclKind, Qual, QualKind};
+use xc_ast::id::OperatorKind;
+use xc_ast::import::{Import, ImportItem, ImportKind, ImportPathSegment};
+use xc_ast::literal::LiteralKind;
 use xc_ast::module::{Module, VisKind, Visibility};
 use xc_ast::token::TokenKind;
-use xc_span::symbol::kw;
+use xc_span::symbol::{kw, op};
+use xc_span::{Identifier, Span};
 
-use super::Case;
 use super::{parser::Parser, ParseResult};
+use super::{Case, SequenceSeparator, TokenExpectType};
 
 impl<'a> Parser<'a> {
     pub fn parse_module(&mut self) -> ParseResult<'a, Module> {
@@ -22,16 +26,20 @@ impl<'a> Parser<'a> {
         let kind = if self.eat(&TokenKind::ColonColon) {
             let quals = mem::replace(&mut quals, thin_vec![]);
 
-            DeclKind::QualDecl(quals)
+            Some(DeclKind::QualDecl(quals))
         } else {
-            self.parse_decl_kind()?
+            self.parse_decl_kind(Case::Sensitive)?
         };
 
-        let span = lo.to(self.prev_token.span);
+        if let Some(kind) = kind {
+            let span = lo.to(self.prev_token.span);
 
-        let decl = Decl { kind, quals, span };
+            let decl = Decl { kind, quals, span };
 
-        Ok(Some(decl))
+            Ok(Some(decl))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_qual_list(&mut self) -> ParseResult<'a, ThinVec<Qual>> {
@@ -100,25 +108,170 @@ impl<'a> Parser<'a> {
                 span: self.prev_token.span,
             }
         } else {
-            return Ok(None)
+            return Ok(None);
         };
 
         Ok(Some(vis))
     }
 
-    fn parse_decl_kind(&mut self) -> ParseResult<'a, DeclKind> {
-        todo!()
+    fn parse_decl_kind(&mut self, case: Case) -> ParseResult<'a, Option<DeclKind>> {
+        let lo = self.token.span;
+
+        let info = if self.eat_keyword_case(kw::Import, case) {
+            self.parse_import(lo)?
+        } else {
+            return Ok(None);
+        };
+
+        Ok(Some(info))
     }
 
-    fn parse_import(&mut self) -> ParseResult<'a, Decl> {
-        todo!()
+    fn parse_import(&mut self, lo: Span) -> ParseResult<'a, DeclKind> {
+        let (path, ..) = self.parse_seq_before(
+            &[&TokenKind::Colon, &TokenKind::Semicolon],
+            SequenceSeparator::new(TokenKind::Op(op::Dot)),
+            TokenExpectType::Yes,
+            |this| this.parse_import_path(),
+        )?;
+
+        let import = match self.token.kind {
+            TokenKind::Colon => {
+                self.next();
+
+                let (items, ..) = self.parse_seq_before_end(
+                    &TokenKind::Semicolon,
+                    SequenceSeparator::new(TokenKind::Comma),
+                    |this| this.parse_import_item(),
+                )?;
+
+                Import {
+                    kind: ImportKind::Normal,
+                    path,
+                    items: Some(items),
+                    span: lo.to(self.prev_token.span),
+                }
+            }
+
+            TokenKind::Semicolon => {
+                self.next();
+
+                Import {
+                    kind: ImportKind::Full,
+                    path,
+                    items: None,
+                    span: lo.to(self.prev_token.span),
+                }
+            }
+
+            _ => {
+                todo!()
+            }
+        };
+
+        Ok(DeclKind::Import(import))
+    }
+
+    fn parse_import_path(&mut self) -> ParseResult<'a, ImportPathSegment> {
+        let segment = match self.token.kind {
+            TokenKind::Identifier(ident) => {
+                let span = self.token.span;
+
+                self.next();
+
+                ImportPathSegment::from_ident(Identifier::new(ident, span))
+            }
+
+            TokenKind::Literal(lit)
+                if matches!(
+                    lit.kind,
+                    LiteralKind::String | LiteralKind::RawString { .. }
+                ) =>
+            {
+                let span = self.token.span;
+
+                self.next();
+
+                ImportPathSegment::from_string(lit.value, span)
+            }
+
+            _ => todo!(),
+        };
+
+        Ok(segment)
+    }
+
+    fn parse_import_item(&mut self) -> ParseResult<'a, ImportItem> {
+        let item = match self.token.kind {
+            TokenKind::Op(op) if op == op::Multiply => {
+                self.next();
+
+                ImportItem::Star
+            }
+
+            TokenKind::Identifier(ident) if !ident.is_reserved() => {
+                let span = self.token.span;
+
+                self.next();
+
+                if self.eat_keyword(kw::As) {
+                    if let Some(alias) = self.token.to_identifier() {
+                        self.next();
+                        ImportItem::Ident(Identifier::new(ident, span), Some(alias))
+                    } else {
+                        todo!()
+                    }
+                } else {
+                    ImportItem::Ident(Identifier::new(ident, span), None)
+                }
+            }
+
+            TokenKind::Identifier(ident) if ident == kw::Operator => {
+                self.next();
+
+                let kind = if self.eat_keyword(kw::Infix) {
+                    Some(OperatorKind::Infix)
+                } else if self.eat_keyword(kw::Prefix) {
+                    Some(OperatorKind::Prefix)
+                } else if self.eat_keyword(kw::Suffix) {
+                    Some(OperatorKind::Suffix)
+                } else {
+                    None
+                };
+
+                match self.token.kind {
+                    TokenKind::Op(op) => {
+                        self.next();
+
+                        ImportItem::Operator(op, kind)
+                    }
+
+                    _ => ImportItem::OperatorAll,
+                }
+            }
+
+            _ => todo!(),
+        };
+
+        Ok(item)
     }
 
     fn check_func_front_matter(&mut self, case: Case) -> bool {
         todo!()
     }
 
-    fn parse_func(&mut self) -> ParseResult<'a, Decl> {
+    fn parse_func(&mut self) -> ParseResult<'a, DeclKind> {
+        todo!()
+    }
+
+    fn parse_type_decl(&mut self) -> ParseResult<'a, DeclKind> {
+        todo!()
+    }
+
+    fn parse_trait(&mut self) -> ParseResult<'a, DeclKind> {
+        todo!()
+    }
+
+    fn parse_impl(&mut self) -> ParseResult<'a, DeclKind> {
         todo!()
     }
 }
