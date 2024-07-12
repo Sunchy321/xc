@@ -17,8 +17,15 @@ pub mod ty;
 pub mod stmt;
 
 pub mod import;
+pub mod func;
 pub mod decl;
 pub mod module;
 
 pub mod tokenstream;
-mod attr;
+pub mod attr;
+
+#[derive(Clone, Debug)]
+pub enum Mutability {
+    Immut,
+    Mut,
+}

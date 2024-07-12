@@ -1,7 +1,7 @@
 use thin_vec::ThinVec;
 use xc_span::{Span, Symbol};
 
-use crate::{expr::Expr, ptr::P};
+use crate::{expr::Expr, ptr::P, Mutability};
 
 #[derive(Clone, Debug)]
 pub enum TypeKind {
@@ -21,14 +21,17 @@ pub enum TypeKind {
     Tuple(ThinVec<P<Type>>),
     Object(ObjectType),
     Dict(P<Type>, P<Type>),
+    Reference(P<Type>, Mutability),
 
     Paren(P<Type>),
     Result(P<Type>, P<Type>),
     Typeof(P<Expr>),
 
-    SomeType(P<Type>),
-    AnyType(P<Type>),
+    ImplType(P<Type>),
+    DynType(P<Type>),
     Class(P<Type>),
+
+    ImplicitThis,
 }
 
 #[derive(Clone, Debug)]

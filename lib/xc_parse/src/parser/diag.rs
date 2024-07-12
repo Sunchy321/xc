@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use xc_ast::expr::{Expr, ExprKind};
 use xc_ast::ptr::P;
 use xc_ast::token::Delimiter;
@@ -31,6 +33,36 @@ impl<'a> Parser<'a> {
         base: P<T>,
     ) -> ParseResult<'a, P<T>> {
         Ok(base) // TODO
+    }
+}
+
+pub struct SnapshotParser<'a> {
+    parser: Parser<'a>,
+}
+
+impl<'a> Deref for SnapshotParser<'a> {
+    type Target = Parser<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.parser
+    }
+}
+
+impl<'a> DerefMut for SnapshotParser<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.parser
+    }
+}
+
+impl<'a> Parser<'a> {
+    pub fn create_snapshot(&self) -> SnapshotParser<'a> {
+        SnapshotParser {
+            parser: self.clone(),
+        }
+    }
+
+    pub fn restore_snapshot(&mut self, snapshot: SnapshotParser<'a>) {
+        *self = snapshot.parser;
     }
 }
 

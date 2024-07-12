@@ -1,13 +1,16 @@
 use thin_vec::ThinVec;
 use xc_span::Span;
 
+use crate::func::Func;
 use crate::import::Import;
 use crate::module::Visibility;
+use crate::ptr::P;
 
 #[derive(Clone, Debug)]
 pub enum DeclKind {
     QualDecl(ThinVec<Qual>),
     Import(Import),
+    Func(P<Func>),
 }
 
 #[derive(Clone, Debug)]

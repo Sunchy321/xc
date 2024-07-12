@@ -1,14 +1,24 @@
+use core::arch;
 use std::mem;
 
 use thin_vec::{thin_vec, ThinVec};
 use xc_ast::decl::{Decl, DeclKind, Qual, QualKind};
+use xc_ast::func::{
+    Func, FuncBody, FuncParam, FuncReturn, FuncSignature, FuncTail, FuncThrow, ThisParam,
+    ThisParamKind,
+};
 use xc_ast::id::OperatorKind;
 use xc_ast::import::{Import, ImportItem, ImportKind, ImportPathSegment};
 use xc_ast::literal::LiteralKind;
 use xc_ast::module::{Module, VisKind, Visibility};
-use xc_ast::token::TokenKind;
+use xc_ast::ptr::P;
+use xc_ast::stmt::Block;
+use xc_ast::token::{Delimiter, Token, TokenKind};
+use xc_ast::Mutability;
 use xc_span::symbol::{kw, op};
 use xc_span::{Identifier, Span};
+
+use crate::parser::attr::{self, ForceCollect, TrailingToken};
 
 use super::{parser::Parser, ParseResult};
 use super::{Case, SequenceSeparator, TokenExpectType};
@@ -119,6 +129,8 @@ impl<'a> Parser<'a> {
 
         let info = if self.eat_keyword_case(kw::Import, case) {
             self.parse_import(lo)?
+        } else if self.eat_keyword_case(kw::Func, case) {
+            self.parse_func(lo)?
         } else {
             return Ok(None);
         };
@@ -256,11 +268,201 @@ impl<'a> Parser<'a> {
     }
 
     fn check_func_front_matter(&mut self, case: Case) -> bool {
+        self.check_keyword_case(kw::Func, case)
+    }
+
+    fn parse_func(&mut self, lo: Span) -> ParseResult<'a, DeclKind> {
+        let func_span = lo;
+
+        let ident = self.parse_func_name()?;
+
+        // TODO: Generic
+
+        let sig = self.parse_func_header()?;
+
+        // TODO: require_body
+        let body = self.parse_func_body(false)?;
+
+        let hi = self.prev_token.span;
+
+        let span = lo.to(hi);
+
+        let func = Func { sig, body };
+
+        Ok(DeclKind::Func(P(func)))
+    }
+
+    fn parse_func_name(&mut self) -> ParseResult<'a, Identifier> {
+        self.parse_identifier()
+    }
+
+    fn parse_func_header(&mut self) -> ParseResult<'a, P<FuncSignature>> {
+        Ok(P(FuncSignature {
+            params: self.parse_func_params()?,
+            tail: self.parse_func_tail()?,
+        }))
+    }
+
+    fn parse_func_params(&mut self) -> ParseResult<'a, ThinVec<FuncParam>> {
+        let mut first_param = true;
+
+        let (params, _) = self.parse_paren_comma_seq(|this| {
+            let result = this.parse_func_param(first_param).or_else(|err| todo!());
+
+            first_param = false;
+
+            result
+        })?;
+
+        Ok(params)
+    }
+
+    fn parse_func_param(&mut self, first_param: bool) -> ParseResult<'a, FuncParam> {
+        let lo = self.token.span;
+
+        let attrs = self.parse_attr_list()?;
+
+        self.collect_tokens(attrs, ForceCollect::No, |this, attrs| {
+            if let Some(mut param) = this.parse_self_param()? {
+                param.attrs = attrs;
+
+                let res = if first_param { Ok(param) } else { todo!() }?;
+
+                return Ok((res, TrailingToken::None));
+            }
+
+            todo!()
+        });
+
         todo!()
     }
 
-    fn parse_func(&mut self) -> ParseResult<'a, DeclKind> {
+    fn parse_self_param(&mut self) -> ParseResult<'a, Option<FuncParam>> {
+        let expect_this_keyword = |this: &mut Self| match this.token.to_identifier() {
+            Some(ident) => {
+                this.next();
+                ident
+            }
+            _ => unreachable!(),
+        };
+
+        let is_isolated_this = |this: &Self, n| {
+            this.is_keyword_ahead(n, &[kw::This])
+                && this.look_ahead(n + 1, |t| t.kind != TokenKind::ColonColon)
+        };
+
+        let is_isolated_mut_this =
+            |this: &Self, n| this.is_keyword_ahead(n, &[kw::Mut]) && is_isolated_this(this, n + 1);
+
+        let parse_self_param_maybe_typed = |this: &mut Self, m| {
+            let this_key = expect_this_keyword(this);
+            let hi = this.prev_token.span;
+
+            let this_kind = if this.eat(&TokenKind::Colon) {
+                ThisParamKind::Explicit(m, this.parse_type()?)
+            } else {
+                ThisParamKind::Value(m)
+            };
+
+            Ok((this_kind, this_key, hi))
+        };
+
+        let lo = self.token.span;
+
+        let (this_kind, this_key, hi) = match self.token.kind {
+            TokenKind::Op(op) if op == op::And => {
+                let this_kind = if is_isolated_this(self, 1) {
+                    // `&this`
+                    self.next();
+                    ThisParamKind::Reference(Mutability::Immut)
+                } else if is_isolated_mut_this(self, 1) {
+                    // `&mut this`
+                    self.next();
+                    self.next();
+                    ThisParamKind::Reference(Mutability::Mut)
+                } else {
+                    return Ok(None);
+                };
+
+                (this_kind, expect_this_keyword(self), self.prev_token.span)
+            }
+
+            TokenKind::Identifier(..) if is_isolated_this(self, 0) => {
+                parse_self_param_maybe_typed(self, Mutability::Immut)?
+            }
+
+            TokenKind::Identifier(..) if is_isolated_mut_this(self, 0) => {
+                parse_self_param_maybe_typed(self, Mutability::Mut)?
+            }
+
+            _ => return Ok(None),
+        };
+
+        let this_param = ThisParam {
+            kind: this_kind,
+            span: lo.to(hi),
+        };
+
+        let param = FuncParam::from_this_param(thin_vec![], this_param, this_key);
+
+        Ok(Some(param))
+    }
+
+    fn parse_func_param_impl(&mut self) -> ParseResult<'a, FuncParam> {
+        match self.token.kind {
+            _ => todo!(),
+        }
+
         todo!()
+    }
+
+    fn parse_func_tail(&mut self) -> ParseResult<'a, FuncTail> {
+        // parse throw specifiers.
+        let throw = if self.eat_keyword(kw::Throw) {
+            if self.eat(&TokenKind::OpenDelim(Delimiter::Paren)) {
+                todo!()
+            } else {
+                FuncThrow::Inferred
+            }
+        } else {
+            FuncThrow::None
+        };
+
+        let ret = if self.eat(&TokenKind::RightArrow) {
+            let ty = self.parse_type()?;
+            FuncReturn::Type(ty)
+        } else {
+            FuncReturn::Inferred
+        };
+
+        Ok(FuncTail { throw, ret })
+    }
+
+    fn parse_func_body(&mut self, require_body: bool) -> ParseResult<'a, FuncBody> {
+        let has_semi = if require_body {
+            self.token.kind == TokenKind::Semicolon
+        } else {
+            self.check(&TokenKind::Semicolon)
+        };
+
+        let body = if has_semi {
+            self.expect_semi()?;
+            FuncBody::Semicolon
+        } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
+            self.parse_block_impl(false).map(FuncBody::Block)?
+        } else if self.eat(&TokenKind::FatArrow) {
+            let expr = self.parse_expr()?;
+
+            if !self.eat(&TokenKind::Semicolon) {
+                todo!()
+            }
+
+            FuncBody::Arrow(expr)
+        } else {
+            todo!()
+        };
+
+        Ok(body)
     }
 
     fn parse_type_decl(&mut self) -> ParseResult<'a, DeclKind> {

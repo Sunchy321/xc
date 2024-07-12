@@ -84,8 +84,18 @@ fn string_to_decl(source_str: String) {
 }
 
 #[test]
-fn test_import() {
+fn test_decl() {
     create_session_globals_then(|| {
-        string_to_decl("import core.\"prelude\" : *, a, b, c, d as e, operator, operator+, operator prefix+;".to_string());
+        string_to_decl(
+            "import core.\"prelude\" : *, a, b, c, d as e, operator, operator+, operator prefix+;"
+                .to_string(),
+        );
+    })
+}
+
+#[test]
+fn test_func() {
+    create_session_globals_then(|| {
+        string_to_decl("func foo() { }".to_string());
     })
 }

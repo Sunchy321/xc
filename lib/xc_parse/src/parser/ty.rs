@@ -43,16 +43,16 @@ impl<'a> Parser<'a> {
                 TypeKind::Class(ty)
             }
 
-            Identifier(sym) if sym == kw::Some => {
+            Identifier(sym) if sym == kw::Impl => {
                 self.next();
                 let ty = self.parse_type_suffix()?;
-                TypeKind::SomeType(ty)
+                TypeKind::ImplType(ty)
             }
 
-            Identifier(sym) if sym == kw::Any => {
+            Identifier(sym) if sym == kw::Dyn => {
                 self.next();
                 let ty = self.parse_type_suffix()?;
-                TypeKind::AnyType(ty)
+                TypeKind::DynType(ty)
             }
 
             _ => return self.parse_type_suffix(),

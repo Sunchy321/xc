@@ -1,9 +1,11 @@
 use thin_vec::ThinVec;
+use xc_span::Identifier;
 
 use crate::expr::Expr;
 use crate::ptr::P;
 use crate::token::Token;
 use crate::ty::Type;
+use crate::Mutability;
 
 #[derive(Clone, Debug)]
 pub enum PatternKind {
@@ -25,7 +27,7 @@ pub struct Pattern {
 pub enum PatternBindKind {
     Wildcard,
     Expr(P<Expr>),
-    Identifier(P<Token>),
+    Identifier(Identifier),
     Array(ArrayPattern<Self>),
     Tuple(TuplePattern<Self>),
     Object(ObjectPattern<Self>),

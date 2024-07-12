@@ -4,6 +4,7 @@ use std::{
     sync::{mpsc::Receiver, Arc},
 };
 
+use itertools::Tee;
 use thin_vec::ThinVec;
 use xc_ast::{
     id,
@@ -132,6 +133,10 @@ impl<'a> Parser<'a> {
         }
 
         looker(&token)
+    }
+
+    pub fn is_keyword_ahead(&self, dist: usize, keys: &[Symbol]) -> bool {
+        self.look_ahead(dist, |t| keys.iter().any(|&kw| t.is_keyword(kw)))
     }
 
     pub fn eat(&mut self, kind: &TokenKind) -> bool {
@@ -308,6 +313,13 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn expected_ident_found(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
         todo!()
+    }
+
+    pub fn expect_semi(&mut self) -> ParseResult<'a, ()> {
+        if self.eat(&TokenKind::Semicolon) {
+            return Ok(());
+        }
+        self.expect(&TokenKind::Semicolon).map(drop)
     }
 
     fn ident_or_error(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
