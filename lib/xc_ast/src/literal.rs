@@ -2,7 +2,7 @@ use core::fmt;
 
 use xc_span::Symbol;
 
-use crate::token::Token;
+use crate::token::{IdentIsRaw, Token};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiteralKind {
@@ -36,7 +36,7 @@ impl Literal {
         use crate::token::TokenKind::*;
 
         match token.kind.clone() {
-            Identifier(sym) if sym.is_bool_lit() => Some(Self::new(LiteralKind::Bool, sym, None)),
+            Identifier(name, IdentIsRaw::No) if name.is_bool_lit() => Some(Self::new(LiteralKind::Bool, name, None)),
             Literal(lit) => Some(lit),
             _ => None,
         }

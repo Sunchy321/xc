@@ -1,5 +1,12 @@
-use xc_ast::{literal::{Literal, LiteralKind}, token::*};
-use xc_lexer::{cursor::Cursor, unescape::{check_raw_string, unescape_char, unescape_string}, Base};
+use xc_ast::{
+    literal::{Literal, LiteralKind},
+    token::*,
+};
+use xc_lexer::{
+    cursor::Cursor,
+    unescape::{check_raw_string, unescape_char, unescape_string},
+    Base,
+};
 use xc_span::{BytePos, Pos, Span, Symbol};
 
 use crate::session::ParseSession;
@@ -73,6 +80,18 @@ impl<'a, 'src> Lexer<'a, 'src> {
 
                 xc_lexer::TokenKind::Identifier => self.proc_identifier(start),
 
+                xc_lexer::TokenKind::RawIdentifier => {
+                    let substr = self.str_from_to(start + BytePos(1), self.pos - BytePos(1));
+
+                    let sym = Symbol::intern(&nfc_normalize(substr));
+
+                    let span = self.make_span(start, self.pos);
+
+                    // TODO: check invalid raw identifier
+
+                    TokenKind::Identifier(sym, IdentIsRaw::Yes)
+                }
+
                 xc_lexer::TokenKind::Literal { kind, suffix_start } => {
                     let suffix_start = start + BytePos(suffix_start);
                     let (kind, symbol) = self.proc_lexer_literal(start, suffix_start, kind);
@@ -92,7 +111,11 @@ impl<'a, 'src> Lexer<'a, 'src> {
                         None
                     };
 
-                    TokenKind::Literal(Literal { kind, value: symbol, suffix })
+                    TokenKind::Literal(Literal {
+                        kind,
+                        value: symbol,
+                        suffix,
+                    })
                 }
 
                 xc_lexer::TokenKind::OpenParen => TokenKind::OpenDelim(Delimiter::Paren),
@@ -122,9 +145,11 @@ impl<'a, 'src> Lexer<'a, 'src> {
 
                     match id.parse::<u32>() {
                         Ok(n) => TokenKind::LambdaArgUnnamed(n),
-                        Err(_) => TokenKind::LambdaArgNamed(Symbol::intern(nfc_normalize(id).as_str()) ),
+                        Err(_) => {
+                            TokenKind::LambdaArgNamed(Symbol::intern(nfc_normalize(id).as_str()))
+                        }
                     }
-                },
+                }
 
                 xc_lexer::TokenKind::Unknown => panic!("Unknown token: {:?}", str_before), // TODO: error handling
 
@@ -133,14 +158,14 @@ impl<'a, 'src> Lexer<'a, 'src> {
 
             let span = self.make_span_end(start);
 
-            return (Token { kind, span }, preceded_by_whitespace)
+            return (Token { kind, span }, preceded_by_whitespace);
         }
     }
 
     fn proc_identifier(&self, start: BytePos) -> TokenKind {
         let sym = Symbol::intern(&nfc_normalize(self.str_from(start)));
 
-        TokenKind::Identifier(sym)
+        TokenKind::Identifier(sym, IdentIsRaw::No)
     }
 
     fn proc_operator(&self, start: BytePos) -> TokenKind {
@@ -172,7 +197,7 @@ impl<'a, 'src> Lexer<'a, 'src> {
                         );
                         if c != '_' && c.to_digit(base).is_none() {
                             // let guar =
-                                // self.dcx().emit_err(errors::InvalidDigitLiteral { span, base });
+                            // self.dcx().emit_err(errors::InvalidDigitLiteral { span, base });
                             kind = LiteralKind::Error;
                         }
                     }
@@ -181,7 +206,10 @@ impl<'a, 'src> Lexer<'a, 'src> {
                 (kind, self.symbol_from_to(start, end))
             }
 
-            xc_lexer::LiteralKind::Floating { base, empty_exponent } => {
+            xc_lexer::LiteralKind::Floating {
+                base,
+                empty_exponent,
+            } => {
                 let mut kind = LiteralKind::Floating;
                 if empty_exponent {
                     // let span = self.mk_sp(start, self.pos);
@@ -193,13 +221,13 @@ impl<'a, 'src> Lexer<'a, 'src> {
                     Base::Binary => {
                         kind = LiteralKind::Error;
                     }
-                    _ => { }
+                    _ => {}
                 }
 
                 (kind, self.symbol_from_to(start, end))
             }
 
-             xc_lexer::LiteralKind::String { terminated } => {
+            xc_lexer::LiteralKind::String { terminated } => {
                 if !terminated {
                     self.raise_error();
                 }
@@ -209,7 +237,13 @@ impl<'a, 'src> Lexer<'a, 'src> {
 
             xc_lexer::LiteralKind::RawString { at_count } => {
                 if let Some(at_count) = at_count {
-                    self.proc_raw_string(LiteralKind::RawString { at_count }, start, end, 1 + at_count, 1 + at_count)
+                    self.proc_raw_string(
+                        LiteralKind::RawString { at_count },
+                        start,
+                        end,
+                        1 + at_count,
+                        1 + at_count,
+                    )
                 } else {
                     self.raise_error();
                 }
@@ -223,9 +257,10 @@ impl<'a, 'src> Lexer<'a, 'src> {
                 self.proc_character(LiteralKind::Char, start, end, 1, 1)
             }
 
-            xc_lexer::LiteralKind::SymbolLit => {
-                (LiteralKind::SymbolLit, self.symbol_from_to(start + BytePos(1), end))
-            }
+            xc_lexer::LiteralKind::SymbolLit => (
+                LiteralKind::SymbolLit,
+                self.symbol_from_to(start + BytePos(1), end),
+            ),
         }
     }
 

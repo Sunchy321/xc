@@ -35,7 +35,7 @@ bitflags::bitflags! {
 pub(crate) enum ExpectTokenKind {
     Token(TokenKind),
     Keyword(Symbol),
-    Operator,
+    Operator(Symbol),
     Identifier,
     Path,
 }

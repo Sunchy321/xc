@@ -1,6 +1,7 @@
 use xc_ast::literal::LiteralKind;
+use xc_ast::module::VisKind;
 use xc_ast::ptr::P;
-use xc_ast::token::{Delimiter, TokenKind};
+use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
 use xc_ast::ty::{Type, TypeKind};
 use xc_span::symbol::{kw, op};
 use xc_span::{Span, Symbol};
@@ -36,26 +37,17 @@ impl<'a> Parser<'a> {
 
         let lo = self.token.span;
 
-        let kind = match self.token.kind {
-            Identifier(sym) if sym == kw::Class => {
-                self.next();
-                let ty = self.parse_type_suffix()?;
-                TypeKind::Class(ty)
-            }
-
-            Identifier(sym) if sym == kw::Impl => {
-                self.next();
-                let ty = self.parse_type_suffix()?;
-                TypeKind::ImplType(ty)
-            }
-
-            Identifier(sym) if sym == kw::Dyn => {
-                self.next();
-                let ty = self.parse_type_suffix()?;
-                TypeKind::DynType(ty)
-            }
-
-            _ => return self.parse_type_suffix(),
+        let kind = if self.eat_keyword(kw::Class) {
+            self.next();
+            TypeKind::Class(self.parse_type_suffix()?)
+        } else if self.eat_keyword(kw::Impl) {
+            self.next();
+            TypeKind::ImplType(self.parse_type_suffix()?)
+        } else if self.eat_keyword(kw::Dyn) {
+            self.next();
+            TypeKind::DynType(self.parse_type_suffix()?)
+        } else {
+            return self.parse_type_suffix();
         };
 
         let span = lo.to(self.prev_token.span);

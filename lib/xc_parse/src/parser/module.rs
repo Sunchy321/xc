@@ -13,7 +13,7 @@ use xc_ast::literal::LiteralKind;
 use xc_ast::module::{Module, VisKind, Visibility};
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
-use xc_ast::token::{Delimiter, Token, TokenKind};
+use xc_ast::token::{Delimiter, IdentIsRaw, Token, TokenKind};
 use xc_ast::Mutability;
 use xc_span::symbol::{kw, op};
 use xc_span::{Identifier, Span};
@@ -185,7 +185,7 @@ impl<'a> Parser<'a> {
 
     fn parse_import_path(&mut self) -> ParseResult<'a, ImportPathSegment> {
         let segment = match self.token.kind {
-            TokenKind::Identifier(ident) => {
+            TokenKind::Identifier(ident, ..) => {
                 let span = self.token.span;
 
                 self.next();
@@ -213,55 +213,40 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_import_item(&mut self) -> ParseResult<'a, ImportItem> {
-        let item = match self.token.kind {
-            TokenKind::Op(op) if op == op::Multiply => {
-                self.next();
+        let item = if self.eat_operator(op::Multiply) {
+            ImportItem::Star
+        } else if self.eat_keyword(kw::Operator) {
+            let kind = if self.eat_keyword(kw::Infix) {
+                Some(OperatorKind::Infix)
+            } else if self.eat_keyword(kw::Prefix) {
+                Some(OperatorKind::Prefix)
+            } else if self.eat_keyword(kw::Suffix) {
+                Some(OperatorKind::Suffix)
+            } else {
+                None
+            };
 
-                ImportItem::Star
-            }
+            match self.token.kind {
+                TokenKind::Op(op) => {
+                    self.next();
 
-            TokenKind::Identifier(ident) if !ident.is_reserved() => {
-                let span = self.token.span;
-
-                self.next();
-
-                if self.eat_keyword(kw::As) {
-                    if let Some(alias) = self.token.to_identifier() {
-                        self.next();
-                        ImportItem::Ident(Identifier::new(ident, span), Some(alias))
-                    } else {
-                        todo!()
-                    }
-                } else {
-                    ImportItem::Ident(Identifier::new(ident, span), None)
+                    ImportItem::Operator(op, kind)
                 }
+
+                _ => ImportItem::OperatorAll,
             }
+        } else if let Ok(ident) = self.parse_identifier() {
+            let span = ident.span;
 
-            TokenKind::Identifier(ident) if ident == kw::Operator => {
-                self.next();
+            if self.eat_keyword(kw::As) {
+                let alias = self.parse_identifier()?;
 
-                let kind = if self.eat_keyword(kw::Infix) {
-                    Some(OperatorKind::Infix)
-                } else if self.eat_keyword(kw::Prefix) {
-                    Some(OperatorKind::Prefix)
-                } else if self.eat_keyword(kw::Suffix) {
-                    Some(OperatorKind::Suffix)
-                } else {
-                    None
-                };
-
-                match self.token.kind {
-                    TokenKind::Op(op) => {
-                        self.next();
-
-                        ImportItem::Operator(op, kind)
-                    }
-
-                    _ => ImportItem::OperatorAll,
-                }
+                ImportItem::Ident(ident, Some(alias))
+            } else {
+                ImportItem::Ident(ident, None)
             }
-
-            _ => todo!(),
+        } else {
+            todo!()
         };
 
         Ok(item)
@@ -339,7 +324,7 @@ impl<'a> Parser<'a> {
 
     fn parse_self_param(&mut self) -> ParseResult<'a, Option<FuncParam>> {
         let expect_this_keyword = |this: &mut Self| match this.token.to_identifier() {
-            Some(ident) => {
+            Some((ident, IdentIsRaw::No)) => {
                 this.next();
                 ident
             }

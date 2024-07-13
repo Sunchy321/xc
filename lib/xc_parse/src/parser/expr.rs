@@ -11,7 +11,7 @@ use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
-use xc_ast::token::{Delimiter, TokenKind};
+use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
 use xc_ast::tokenstream::Spacing;
 use xc_ast::ty::Type;
 use xc_error::ErrorGuaranteed;
@@ -44,7 +44,7 @@ impl<'a> Parser<'a> {
             false
         } else {
             match self.token.kind {
-                Identifier(sym) => {
+                Identifier(sym, IdentIsRaw::No) => {
                     if sym == kw::Then && self.restrictions.contains(Restrictions::THEN_IS_KEYWORD)
                     {
                         return false;
@@ -803,12 +803,12 @@ impl<'a> Parser<'a> {
 
                     // parse !in and !is.
                     match (self.prev_token.kind.clone(), self.token.kind.clone()) {
-                        (Op(first), Identifier(second)) => {
+                        (Op(first), Identifier(second, IdentIsRaw::No)) => {
                             combine_op!(first == op::Exclamation, second == kw::In, op::NotIn);
                             combine_op!(first == op::Exclamation, second == kw::Is, op::NotIs);
                         }
 
-                        (Identifier(first), Op(second)) => {
+                        (Identifier(first, IdentIsRaw::No), Op(second)) => {
                             combine_op!(first == kw::As, second == op::Question, op::AsQuestion);
                             combine_op!(
                                 first == kw::As,
@@ -846,33 +846,24 @@ impl<'a> Parser<'a> {
     fn parse_dot_part(&mut self) -> ParseResult<'a, ExprAtom> {
         let lo = self.prev_token.span;
 
-        let atom = match self.token.kind {
-            TokenKind::Identifier(sym) if sym == kw::Await => {
-                self.make_expr_atom(ExprAtomKind::DotAwait, lo.to(self.token.span))
-            }
-
-            TokenKind::Identifier(id) => {
-                self.make_expr_atom(ExprAtomKind::MemberAccess(id), lo.to(self.token.span))
-            }
-
-            TokenKind::Literal(Literal {
-                kind: LiteralKind::Integer,
-                value: sym,
-                ..
-            }) => self.make_expr_atom(ExprAtomKind::MemberAccess(sym), lo.to(self.token.span)),
-
-            TokenKind::OpenDelim(Delimiter::Paren) => {
-                let expr = self.parse_expr_tuple_parens()?;
-                self.make_expr_atom(
-                    ExprAtomKind::MemberDynamicAccess(expr),
-                    lo.to(self.prev_token.span),
-                )
-            }
-
-            _ => unimplemented!(),
+        let kind = if self.eat_keyword(kw::Await) {
+            ExprAtomKind::DotAwait
+        } else if self.check(&TokenKind::OpenDelim(Delimiter::Paren)) {
+            let expr = self.parse_expr_tuple_parens()?;
+            ExprAtomKind::MemberDynamicAccess(expr)
+        } else if let Some((ident, ..)) = self.token.to_identifier() && !self.token.is_reserved_ident() {
+            self.next();
+            ExprAtomKind::MemberAccess(ident.name)
+        } else if let TokenKind::Literal(lit) = self.token.kind && lit.kind == LiteralKind::Integer {
+            self.next();
+            ExprAtomKind::MemberAccess(lit.value)
+        } else {
+            todo!()
         };
 
-        Ok(atom)
+        let span = lo.to(self.prev_token.span);
+
+        Ok(self.make_expr_atom(kind, span))
     }
 
     fn parse_expr_primary(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -1003,8 +994,8 @@ impl<'a> Parser<'a> {
             return Ok(StructItem::Expansion(expr));
         }
 
-        if self.token.is_identifier() && self.look_ahead(1, |t| t.kind == TokenKind::Colon) {
-            let key = self.token.to_identifier().unwrap().name;
+        if let Some((ident, is_raw)) = self.token.to_identifier() && self.look_ahead(1, |t| t.kind == TokenKind::Colon) {
+            let key = ident.name;
 
             self.next();
             self.next();

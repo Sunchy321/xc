@@ -19,6 +19,7 @@ pub enum TokenKind {
     Whitespace,
 
     Identifier,
+    RawIdentifier,
 
     Operator,
 
@@ -132,6 +133,8 @@ impl<'a> Cursor<'a> {
             c if is_whitespace(c) => self.whitespace(),
 
             c if is_id_start(c) => self.identifier(),
+
+            '`' => self.raw_identifier(),
 
             c @ '0'..='9' => {
                 let kind = self.numeric(c);
@@ -263,6 +266,18 @@ impl<'a> Cursor<'a> {
         debug_assert!(is_whitespace(self.prev()) || self.prev() == '\'');
         self.eats(is_whitespace);
         Whitespace
+    }
+
+    fn raw_identifier(&mut self) -> TokenKind {
+        debug_assert!(self.prev() == '`');
+
+        self.eats(|c| c != '`');
+
+        if self.peek() == '`' {
+            self.next();
+        }
+
+        RawIdentifier
     }
 
     fn identifier(&mut self) -> TokenKind {

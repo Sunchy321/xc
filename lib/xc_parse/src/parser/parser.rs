@@ -9,7 +9,7 @@ use thin_vec::ThinVec;
 use xc_ast::{
     id,
     literal::LiteralKind,
-    token::{Delimiter, Token, TokenKind},
+    token::{Delimiter, IdentIsRaw, Token, TokenKind},
     tokenstream::{Spacing, TokenStream, TokenTree},
 };
 use xc_error::diag::Diagnostic;
@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
         }
 
         if case == Case::Insensitive
-            && let Some(ident) = self.token.to_identifier()
+            && let Some((ident, IdentIsRaw::No)) = self.token.to_identifier()
             && ident.as_str().to_lowercase() == key.as_str().to_lowercase()
         {
             // TODO: make error
@@ -177,6 +177,15 @@ impl<'a> Parser<'a> {
 
     pub fn eat_keyword_noexpect(&mut self, key: Symbol) -> bool {
         if self.token.is_keyword(key) {
+            self.next();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn eat_operator(&mut self, op: Symbol) -> bool {
+        if self.check_operator(op) {
             self.next();
             true
         } else {
@@ -267,13 +276,22 @@ impl<'a> Parser<'a> {
             return false;
         }
 
-        if let Some(ident) = self.token.to_identifier()
+        if let Some((ident, IdentIsRaw::No)) = self.token.to_identifier()
             && ident.as_str().to_lowercase() == key.as_str().to_lowercase()
         {
             return true;
         }
 
         false
+    }
+
+    pub fn check_operator(&mut self, op: Symbol) -> bool {
+        self.expected_tokens.push(ExpectTokenKind::Operator(op));
+
+        match self.token.kind {
+            TokenKind::Op(token_op) => token_op == op,
+            _ => false,
+        }
     }
 
     pub fn expect(&mut self, kind: &TokenKind) -> Result<Recovered, Diagnostic<'a>> {
@@ -311,7 +329,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(crate) fn expected_ident_found(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
+    pub(crate) fn expected_ident_found(&mut self, recover: bool) -> ParseResult<'a, (Identifier, IdentIsRaw)> {
         todo!()
     }
 
@@ -322,7 +340,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Semicolon).map(drop)
     }
 
-    fn ident_or_error(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
+    fn ident_or_error(&mut self, recover: bool) -> ParseResult<'a, (Identifier, IdentIsRaw)> {
         match self.token.to_identifier() {
             Some(ident) => Ok(ident),
             None => self.expected_ident_found(recover),
@@ -330,9 +348,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ident_impl(&mut self, recover: bool) -> ParseResult<'a, Identifier> {
-        let ident = self.ident_or_error(recover)?;
+        let (ident, is_raw) = self.ident_or_error(recover)?;
 
-        if ident.is_reserved() {
+        if is_raw == IdentIsRaw::No && ident.is_reserved() {
             todo!("error processing")
         }
 

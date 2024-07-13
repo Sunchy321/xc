@@ -64,12 +64,18 @@ pub enum TokenKind {
 
     Literal(Literal),
 
-    Identifier(Symbol),
+    Identifier(Symbol, IdentIsRaw),
 
     LambdaArgUnnamed(u32),
     LambdaArgNamed(Symbol),
 
     Eof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentIsRaw {
+    Yes,
+    No,
 }
 
 impl TokenKind {
@@ -98,9 +104,11 @@ impl Token {
         }
     }
 
-    pub fn to_identifier(&self) -> Option<Identifier> {
+    pub fn to_identifier(&self) -> Option<(Identifier, IdentIsRaw)> {
         match &self.kind {
-            &TokenKind::Identifier(name) => Some(Identifier::new(name, self.span)),
+            &TokenKind::Identifier(name, is_raw) => {
+                Some((Identifier::new(name, self.span), is_raw))
+            }
             _ => None,
         }
     }
@@ -109,27 +117,27 @@ impl Token {
         self.to_identifier().is_some()
     }
 
-    pub fn is_identifier_and(&self, pred: impl FnOnce(Identifier) -> bool) -> bool {
-        self.to_identifier().map_or(false, pred)
+    pub fn is_normal_ident_and(&self, pred: impl FnOnce(Identifier) -> bool) -> bool {
+        match self.to_identifier() {
+            Some((id, IdentIsRaw::No)) => pred(id),
+            _ => false
+        }
     }
 
     pub fn is_reserved_ident(&self) -> bool {
-        self.is_identifier_and(|id| id.name.is_reserved())
+        self.is_normal_ident_and(|id| id.name.is_reserved())
     }
 
     pub fn is_path_start(&self) -> bool {
         match self.kind {
             TokenKind::ColonColon => true,
-            TokenKind::Identifier(_) => !self.is_reserved_ident(),
+            TokenKind::Identifier(..) => !self.is_reserved_ident(),
             _ => false,
         }
     }
 
     pub fn is_keyword(&self, key: Symbol) -> bool {
-        match self.to_identifier() {
-            Some(id) => id.name == key,
-            None => false,
-        }
+        self.is_normal_ident_and(|id| id.name == key)
     }
 
     pub fn can_begin_expr(&self) -> bool {
@@ -156,7 +164,7 @@ impl Token {
 
             Literal(..) => true,
 
-            Identifier(name) => ident_can_begin_expr(name),
+            Identifier(name, is_raw) => ident_can_begin_expr(name, is_raw, self.span),
 
             LambdaArgUnnamed(..) => true,
             LambdaArgNamed(..) => true,
@@ -167,7 +175,7 @@ impl Token {
 
     pub fn to_builtin_type(&self) -> Option<TypeKind> {
         match self.kind {
-            TokenKind::Identifier(sym) => {
+            TokenKind::Identifier(sym, IdentIsRaw::No) => {
                 use TypeKind::*;
 
                 let kind = match sym {
@@ -188,8 +196,10 @@ impl Token {
     }
 }
 
-fn ident_can_begin_expr(name: Symbol) -> bool {
-    !name.is_reserved()
+fn ident_can_begin_expr(name: Symbol, is_raw: IdentIsRaw, span: Span) -> bool {
+    let token = Token { kind: TokenKind::Identifier(name, is_raw), span };
+
+    !token.is_reserved_ident()
         || [
             kw::Break,
             kw::Continue,
