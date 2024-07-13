@@ -118,6 +118,7 @@ impl FuncParam {
                 },
             })),
             assert: None,
+            span
         });
 
         FuncParam {

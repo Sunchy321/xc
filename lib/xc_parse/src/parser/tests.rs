@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use xc_ast::{expr::Expr, ptr::P};
 use xc_span::{create_session_globals_then, source_map::Filename};
 
@@ -72,6 +74,38 @@ fn test_array() {
         string_to_expr("[k:v]".to_string());
         string_to_expr("[k:v,...d]".to_string());
         string_to_expr("[...d,k:v]".to_string());
+    })
+}
+
+fn string_to_pattern(source_str: String) {
+    check_parse(source_str, &session(), |p| {
+        let pat = p.parse_pattern()?;
+        println!("{:?}", pat);
+        Ok(pat)
+    });
+}
+
+#[test]
+fn test_pattern() {
+    create_session_globals_then(|| {
+        string_to_pattern("_".to_string());
+        // string_to_pattern("1".to_string());
+        // string_to_pattern("a".to_string());
+        // string_to_pattern("let a".to_string());
+        // string_to_pattern("[a, b]".to_string());
+        // string_to_pattern("[a, let b]".to_string());
+        // string_to_pattern("let [a, b]".to_string());
+        // string_to_pattern("[a, ..., z]".to_string());
+        // string_to_pattern("[a, let ...m, z]".to_string());
+        // string_to_pattern("let [a, ..., z]".to_string());
+        // string_to_pattern("(a, b)".to_string());
+        // string_to_pattern("let (a, b)".to_string());
+        // string_to_pattern("(a, let b)".to_string());
+        // string_to_pattern("{ k: v }".to_string());
+        // string_to_pattern("{ k }".to_string());
+        // string_to_pattern("{ k: let v }".to_string());
+        // string_to_pattern("let { k: v }".to_string());
+        // string_to_pattern("let { k }".to_string());
     })
 }
 

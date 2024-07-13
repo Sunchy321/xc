@@ -5,15 +5,14 @@ use std::{path::Path, rc::Rc};
 use lexer::parse_token_tree;
 use parser::parser::Parser;
 use session::ParseSession;
-use xc_ast::{token::{self, TokenKind}, tokenstream::TokenStream};
+use xc_ast::tokenstream::TokenStream;
+use xc_ast::token::TokenKind;
 use xc_error::diag::Diagnostic;
 use xc_span::{source_file::SourceFile, source_map::Filename, Span};
 
 pub mod session;
 pub mod lexer;
 pub mod parser;
-
-pub mod error;
 
 pub fn parser_from_file<'s>(session: &'s ParseSession, path: &Path, span: Option<Span>) -> Parser<'s> {
     let source_file = session.source_map();
