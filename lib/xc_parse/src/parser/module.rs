@@ -317,9 +317,7 @@ impl<'a> Parser<'a> {
             }
 
             todo!()
-        });
-
-        todo!()
+        })
     }
 
     fn parse_self_param(&mut self) -> ParseResult<'a, Option<FuncParam>> {
@@ -393,7 +391,7 @@ impl<'a> Parser<'a> {
         Ok(Some(param))
     }
 
-    fn parse_func_param_impl(&mut self) -> ParseResult<'a, FuncParam> {
+    fn parse_func_param_normal(&mut self) -> ParseResult<'a, FuncParam> {
         match self.token.kind {
             _ => todo!(),
         }

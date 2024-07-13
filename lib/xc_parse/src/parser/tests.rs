@@ -97,5 +97,9 @@ fn test_decl() {
 fn test_func() {
     create_session_globals_then(|| {
         string_to_decl("func foo() { }".to_string());
+        string_to_decl("func foo(this) { }".to_string());
+        string_to_decl("func foo(&mut this) { }".to_string());
+        string_to_decl("func foo(this: int) { }".to_string());
+        // string_to_decl("func foo(a: int) -> void { }".to_string());
     })
 }
