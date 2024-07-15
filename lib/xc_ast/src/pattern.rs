@@ -9,10 +9,11 @@ use crate::ty::Type;
 pub enum PatternKind {
     Wildcard,
     Expr(P<Expr>),
-    Bind(P<PatternBind>),
-    Array(ArrayPattern<Self>),
-    Tuple(TuplePattern<Self>),
-    Object(ObjectPattern<Self>),
+    Bind(Identifier),
+    Mutable(P<Pattern>),
+    Array(ThinVec<ArrayPatternItem>),
+    Tuple(ThinVec<TuplePatternItem>),
+    Object(ThinVec<ObjectPatternItem>),
 }
 
 #[derive(Clone, Debug)]
@@ -33,16 +34,6 @@ impl Pattern {
 
 }
 
-#[derive(Clone, Debug)]
-pub enum PatternBindKind {
-    Wildcard,
-    Expr(P<Expr>),
-    Identifier(Identifier),
-    Array(ArrayPattern<Self>),
-    Tuple(TuplePattern<Self>),
-    Object(ObjectPattern<Self>),
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum BindKey {
     Let,
@@ -50,42 +41,21 @@ pub enum BindKey {
 }
 
 #[derive(Clone, Debug)]
-pub struct PatternBind {
-    pub kind: PatternBindKind,
-    pub key: BindKey,
+pub enum ArrayPatternItem {
+    Item(P<Pattern>),
+    Rest(Option<P<Pattern>>),
 }
 
 #[derive(Clone, Debug)]
-pub enum ArrayPatternItem<T> {
-    Item(P<T>),
-    Rest(Option<P<T>>),
+pub enum TuplePatternItem {
+    Item(P<Pattern>),
+    Rest(Option<P<Pattern>>),
 }
 
 #[derive(Clone, Debug)]
-pub struct ArrayPattern<T> {
-    pub items: ThinVec<ArrayPatternItem<T>>,
-}
-
-#[derive(Clone, Debug)]
-pub enum TuplePatternItem<T> {
-    Item(P<T>),
-    Rest(Option<P<T>>),
-}
-
-#[derive(Clone, Debug)]
-pub struct TuplePattern<T> {
-    pub items: ThinVec<TuplePatternItem<T>>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ObjectPatternItem<T> {
-    Field(String, P<T>),
-    Rest(Option<P<T>>),
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectPattern<T> {
-    pub items: ThinVec<ObjectPatternItem<T>>,
+pub enum ObjectPatternItem {
+    Field(Identifier, P<Pattern>),
+    Rest(Option<P<Pattern>>),
 }
 
 #[derive(Clone, Debug)]

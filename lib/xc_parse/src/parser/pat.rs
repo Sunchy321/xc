@@ -1,7 +1,7 @@
 use xc_ast::pattern::{Pattern, PatternKind};
 use xc_span::symbol::kw;
 
-use super::{parser::Parser, ParseResult};
+use super::{parser::Parser, ParseResult, Restrictions};
 
 impl<'a> Parser<'a> {
     pub fn parse_pattern(&mut self) -> ParseResult<'a, Pattern> {
@@ -13,8 +13,14 @@ impl<'a> Parser<'a> {
 
         let kind = if self.eat_keyword(kw::Underscore) {
             PatternKind::Wildcard
+        } else if self.restrictions.contains(Restrictions::PAT_IN_LET)
+            && let Ok(ident) = self.parse_identifier()
+        {
+            PatternKind::Bind(ident)
         } else {
-            todo!()
+            let expr = self.parse_expr()?;
+
+            PatternKind::Expr(expr)
         };
 
         let span = lo.to(self.prev_token.span);

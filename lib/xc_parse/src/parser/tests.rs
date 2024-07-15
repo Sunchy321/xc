@@ -89,8 +89,8 @@ fn string_to_pattern(source_str: String) {
 fn test_pattern() {
     create_session_globals_then(|| {
         string_to_pattern("_".to_string());
-        // string_to_pattern("1".to_string());
-        // string_to_pattern("a".to_string());
+        string_to_pattern("1".to_string());
+        string_to_pattern("a".to_string());
         // string_to_pattern("let a".to_string());
         // string_to_pattern("[a, b]".to_string());
         // string_to_pattern("[a, let b]".to_string());

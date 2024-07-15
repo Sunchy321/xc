@@ -28,6 +28,7 @@ bitflags::bitflags! {
         const THEN_IS_KEYWORD = 1 << 2;
         const STMT_EXPR = 1 << 3;
         const PAT_IN_LET = 1 << 4;
+        const PAT_IN_LET_IS_MUT = 1 << 5;
     }
 }
 

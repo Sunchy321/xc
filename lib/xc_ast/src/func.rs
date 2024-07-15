@@ -7,7 +7,7 @@ use xc_span::{Identifier, Span};
 use crate::attr::Attribute;
 use crate::decl::Qual;
 use crate::expr::Expr;
-use crate::pattern::{BindKey, Pattern, PatternBind, PatternBindKind, PatternKind};
+use crate::pattern::{BindKey, Pattern, PatternKind};
 use crate::ptr::P;
 use crate::stmt::Block;
 use crate::ty::{Type, TypeKind};
@@ -109,14 +109,17 @@ impl FuncParam {
             ),
         };
 
+        let pat_kind = match mutability {
+            Mutability::Immut => PatternKind::Bind(this_key),
+            Mutability::Mut => {
+                let pat = P(Pattern::new(PatternKind::Bind(this_key), span));
+
+                PatternKind::Mutable(pat)
+            }
+        };
+
         let pattern = P(Pattern {
-            kind: PatternKind::Bind(P(PatternBind {
-                kind: PatternBindKind::Identifier(this_key),
-                key: match mutability {
-                    Mutability::Immut => BindKey::LetMut,
-                    Mutability::Mut => BindKey::Let,
-                },
-            })),
+            kind: pat_kind,
             assert: None,
             span
         });
