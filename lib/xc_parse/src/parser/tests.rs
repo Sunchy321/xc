@@ -91,7 +91,7 @@ fn test_pattern() {
         string_to_pattern("_".to_string());
         string_to_pattern("1".to_string());
         string_to_pattern("a".to_string());
-        // string_to_pattern("let a".to_string());
+        string_to_pattern("let a".to_string());
         // string_to_pattern("[a, b]".to_string());
         // string_to_pattern("[a, let b]".to_string());
         // string_to_pattern("let [a, b]".to_string());
