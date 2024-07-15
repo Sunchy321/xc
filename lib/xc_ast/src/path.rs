@@ -1,4 +1,4 @@
-use thin_vec::ThinVec;
+use thin_vec::{thin_vec, ThinVec};
 use xc_span::{symbol::kw, Identifier, Span};
 
 #[derive(Clone, Copy, Debug)]
@@ -37,4 +37,23 @@ impl PathSegment {
 pub struct Path {
     pub segments: ThinVec<PathSegment>,
     pub span: Span,
+}
+
+impl Path {
+    pub fn from_single_ident(ident: Identifier) -> Self {
+        let span = ident.span;
+
+        Self {
+            segments: thin_vec![PathSegment::from_ident(ident)],
+            span,
+        }
+    }
+
+    pub fn to_single_ident(&self) -> Option<Identifier> {
+        if self.segments.len() == 1 {
+            Some(self.segments[0].ident.clone())
+        } else {
+            None
+        }
+    }
 }

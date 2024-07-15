@@ -109,17 +109,8 @@ impl FuncParam {
             ),
         };
 
-        let pat_kind = match mutability {
-            Mutability::Immut => PatternKind::Bind(this_key),
-            Mutability::Mut => {
-                let pat = P(Pattern::new(PatternKind::Bind(this_key), span));
-
-                PatternKind::Mutable(pat)
-            }
-        };
-
         let pattern = P(Pattern {
-            kind: pat_kind,
+            kind: PatternKind::Bind(this_key, mutability),
             assert: None,
             span
         });

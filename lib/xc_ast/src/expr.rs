@@ -2,7 +2,7 @@ use core::fmt;
 
 use thin_vec::ThinVec;
 use xc_error::ErrorGuaranteed;
-use xc_span::{Span, Symbol};
+use xc_span::{Identifier, Span, Symbol};
 
 use crate::literal::Literal;
 use crate::path::Path;
@@ -153,6 +153,15 @@ impl Expr {
             kind,
             span: self.span,
         }))
+    }
+
+    pub fn to_single_ident(&self) -> Option<Identifier> {
+        use ExprKind::*;
+
+        match &self.kind {
+            Path(p) => p.to_single_ident(),
+            _ => None,
+        }
     }
 }
 

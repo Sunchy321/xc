@@ -362,6 +362,14 @@ impl<'a> Parser<'a> {
         self.parse_ident_impl(true)
     }
 
+    pub fn check_identifier(&mut self) -> bool {
+        match self.token.kind {
+            TokenKind::Identifier(ident, IdentIsRaw::No) => !Identifier::new(ident, self.token.span).is_reserved(),
+            TokenKind::Identifier(_, IdentIsRaw::Yes) => true,
+            _ => false,
+        }
+    }
+
     pub fn parse_paren_comma_seq<T>(
         &mut self,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
