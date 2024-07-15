@@ -108,7 +108,7 @@ impl Span {
     }
 
     pub fn to(self, end: Span) -> Span {
-        Span::new(cmp::min(self.lo, end.lo), cmp::max(self.lo, end.lo))
+        Span::new(cmp::min(self.lo, end.lo), cmp::max(self.hi, end.hi))
     }
 
     pub fn with_lo(&self, lo: BytePos) -> Self {
