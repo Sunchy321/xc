@@ -47,7 +47,7 @@ pub enum TokenExpectType {
     No,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HasTrailing {
     Yes,
     No,

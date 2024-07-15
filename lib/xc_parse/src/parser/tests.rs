@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use xc_ast::{expr::Expr, ptr::P};
 use xc_span::{create_session_globals_then, source_map::Filename};
 
@@ -101,11 +99,11 @@ fn test_pattern() {
         string_to_pattern("(a, b)".to_string());
         string_to_pattern("let (a, b)".to_string());
         string_to_pattern("(a, let b)".to_string());
-        // string_to_pattern("{ k: v }".to_string());
-        // string_to_pattern("{ k }".to_string());
-        // string_to_pattern("{ k: let v }".to_string());
-        // string_to_pattern("let { k: v }".to_string());
-        // string_to_pattern("let { k }".to_string());
+        string_to_pattern("{ k: v }".to_string());
+        string_to_pattern("{ k }".to_string());
+        string_to_pattern("{ k: let v }".to_string());
+        string_to_pattern("let { k: v }".to_string());
+        string_to_pattern("let { k }".to_string());
     })
 }
 

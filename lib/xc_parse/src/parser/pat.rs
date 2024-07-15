@@ -1,4 +1,4 @@
-use xc_ast::expr::{self, Expr, ExprKind};
+use xc_ast::expr::ExprKind;
 use xc_ast::path::Path;
 use xc_ast::pattern::{
     ArrayPatternItem, ObjectPatternItem, Pattern, PatternKind, TuplePatternItem,
@@ -6,9 +6,10 @@ use xc_ast::pattern::{
 use xc_ast::ptr::P;
 use xc_ast::token::{Delimiter, TokenKind};
 use xc_ast::Mutability;
-use xc_span::symbol::kw::{self, Mut};
+use xc_span::symbol::kw;
 use xc_span::{Identifier, Span};
 
+use super::HasTrailing;
 use super::{parser::Parser, ParseResult, Restrictions};
 
 impl<'a> Parser<'a> {
@@ -19,6 +20,8 @@ impl<'a> Parser<'a> {
             self.parse_pattern_tuple()
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Bracket)) {
             self.parse_pattern_array()
+        } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
+            self.parse_pattern_struct()
         } else if self.eat_keyword(kw::Let) {
             self.parse_pattern_let(lo)
         } else {
@@ -29,7 +32,7 @@ impl<'a> Parser<'a> {
     pub fn parse_pattern_tuple(&mut self) -> ParseResult<'a, Pattern> {
         let lo = self.token.span;
 
-        let (pats, _) = self.parse_delim_comma_seq(Delimiter::Paren, |this| {
+        let (pats, trailing) = self.parse_delim_comma_seq(Delimiter::Paren, |this| {
             if this.eat(&TokenKind::DotDotDot) {
                 if this.check(&TokenKind::Comma) {
                     Ok(TuplePatternItem::Expand(None))
@@ -42,6 +45,13 @@ impl<'a> Parser<'a> {
                 Ok(TuplePatternItem::Item(pat))
             }
         })?;
+
+        if pats.len() == 1 && trailing == HasTrailing::No {
+            match &pats[0] {
+                TuplePatternItem::Item(pat) => return Ok(pat.clone().into_inner()),
+                _ => {}
+            }
+        }
 
         let span = lo.to(self.prev_token.span);
 
@@ -70,7 +80,7 @@ impl<'a> Parser<'a> {
         Ok(Pattern::new(PatternKind::Array(pats), span))
     }
 
-    pub fn parse_pattern_object(&mut self) -> ParseResult<'a, Pattern> {
+    pub fn parse_pattern_struct(&mut self) -> ParseResult<'a, Pattern> {
         let lo = self.token.span;
 
         let (fields, _) = self.parse_delim_comma_seq(Delimiter::Brace, |this| {
@@ -81,7 +91,13 @@ impl<'a> Parser<'a> {
                     let pat = P(this.parse_pattern()?);
                     Ok(ObjectPatternItem::Expand(Some(pat)))
                 }
-            } else if this.check_identifier() && this.look_ahead(1, |t| t.kind == TokenKind::Comma)
+            } else if this.check_identifier()
+                && this.look_ahead(1, |t| {
+                    matches!(
+                        t.kind,
+                        TokenKind::Comma | TokenKind::CloseDelim(Delimiter::Brace)
+                    )
+                })
             {
                 let ident = this.parse_identifier()?;
 

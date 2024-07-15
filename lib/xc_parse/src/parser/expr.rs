@@ -851,10 +851,14 @@ impl<'a> Parser<'a> {
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Paren)) {
             let expr = self.parse_expr_tuple_parens()?;
             ExprAtomKind::MemberDynamicAccess(expr)
-        } else if let Some((ident, ..)) = self.token.to_identifier() && !self.token.is_reserved_ident() {
+        } else if let Some((ident, ..)) = self.token.to_identifier()
+            && !self.token.is_reserved_ident()
+        {
             self.next();
             ExprAtomKind::MemberAccess(ident.name)
-        } else if let TokenKind::Literal(lit) = self.token.kind && lit.kind == LiteralKind::Integer {
+        } else if let TokenKind::Literal(lit) = self.token.kind
+            && lit.kind == LiteralKind::Integer
+        {
             self.next();
             ExprAtomKind::MemberAccess(lit.value)
         } else {
@@ -994,7 +998,9 @@ impl<'a> Parser<'a> {
             return Ok(StructItem::Expansion(expr));
         }
 
-        if let Some((ident, is_raw)) = self.token.to_identifier() && self.look_ahead(1, |t| t.kind == TokenKind::Colon) {
+        if let Some((ident, is_raw)) = self.token.to_identifier()
+            && self.look_ahead(1, |t| t.kind == TokenKind::Colon)
+        {
             let key = ident.name;
 
             self.next();
@@ -1065,7 +1071,7 @@ impl<'a> Parser<'a> {
                     }
                 }
 
-                ArrayDictItem::Expansion(..) => { }
+                ArrayDictItem::Expansion(..) => {}
             }
         }
 
