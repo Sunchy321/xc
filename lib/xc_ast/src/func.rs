@@ -1,13 +1,8 @@
-use std::ops::Mul;
-
 use thin_vec::ThinVec;
-use xc_span::symbol::op::MultiplyAssign;
 use xc_span::{Identifier, Span};
 
 use crate::attr::Attribute;
-use crate::decl::Qual;
 use crate::expr::Expr;
-use crate::pattern::{BindKey, Pattern, PatternKind};
 use crate::ptr::P;
 use crate::stmt::Block;
 use crate::ty::{Type, TypeKind};
@@ -15,6 +10,7 @@ use crate::Mutability;
 
 #[derive(Clone, Debug)]
 pub struct Func {
+    pub ident: Identifier,
     pub sig: P<FuncSignature>,
     pub body: FuncBody,
 }

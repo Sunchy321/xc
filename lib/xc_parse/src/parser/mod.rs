@@ -10,11 +10,13 @@ pub mod parser;
 
 pub mod attr;
 pub mod expr;
-pub mod module;
 pub mod pat;
 pub mod path;
 pub mod stmt;
 pub mod ty;
+
+pub mod module;
+pub mod func;
 
 #[cfg(test)]
 mod tests;
