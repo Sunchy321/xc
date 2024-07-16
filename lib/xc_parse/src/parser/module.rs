@@ -14,7 +14,7 @@ use xc_ast::module::{Module, VisKind, Visibility};
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
 use xc_ast::token::{Delimiter, IdentIsRaw, Token, TokenKind};
-use xc_ast::Mutability;
+use xc_ast::{ty, Mutability};
 use xc_span::symbol::{kw, op};
 use xc_span::{Identifier, Span};
 
@@ -235,8 +235,8 @@ impl<'a> Parser<'a> {
 
                 _ => ImportItem::OperatorAll,
             }
-        } else if let Ok(ident) = self.parse_identifier() {
-            let span = ident.span;
+        } else if self.check_identifier() {
+            let ident = self.parse_identifier()?;
 
             if self.eat_keyword(kw::As) {
                 let alias = self.parse_identifier()?;
@@ -316,7 +316,11 @@ impl<'a> Parser<'a> {
                 return Ok((res, TrailingToken::None));
             }
 
-            todo!()
+            let mut param = this.parse_func_param_normal(lo)?;
+
+            param.attrs = attrs;
+
+            Ok((param, TrailingToken::None))
         })
     }
 
@@ -391,12 +395,38 @@ impl<'a> Parser<'a> {
         Ok(Some(param))
     }
 
-    fn parse_func_param_normal(&mut self) -> ParseResult<'a, FuncParam> {
-        match self.token.kind {
-            _ => todo!(),
-        }
+    fn parse_func_param_normal(&mut self, lo: Span) -> ParseResult<'a, FuncParam> {
+        let (name_ident, param_ident) = if self.eat(&TokenKind::OpenDelim(Delimiter::Paren)) {
+            let name_ident = self.parse_identifier()?;
 
-        todo!()
+            self.expect(&TokenKind::CloseDelim(Delimiter::Paren))?;
+
+            let param_ident = if self.check_identifier() {
+                self.parse_identifier()?
+            } else {
+                name_ident.clone()
+            };
+
+            (Some(name_ident), param_ident)
+        } else {
+            let param_ident = self.parse_identifier()?;
+
+            (None, param_ident)
+        };
+
+        self.expect(&TokenKind::Colon);
+
+        let ty = self.parse_type()?;
+
+        let span = lo.to(self.prev_token.span);
+
+        Ok(FuncParam {
+            attrs: thin_vec![],
+            name: name_ident,
+            ident: param_ident,
+            ty,
+            span
+        })
     }
 
     fn parse_func_tail(&mut self) -> ParseResult<'a, FuncTail> {

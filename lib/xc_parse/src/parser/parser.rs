@@ -258,6 +258,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub(crate) fn check_identifier(&mut self) -> bool {
+        self.check_or_expected(self.token.is_identifier(), ExpectTokenKind::Identifier)
+    }
+
     pub(crate) fn check_path(&mut self) -> bool {
         self.check_or_expected(self.token.is_path_start(), ExpectTokenKind::Path)
     }
@@ -329,7 +333,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(crate) fn expected_ident_found(&mut self, recover: bool) -> ParseResult<'a, (Identifier, IdentIsRaw)> {
+    pub(crate) fn expected_ident_found(
+        &mut self,
+        recover: bool,
+    ) -> ParseResult<'a, (Identifier, IdentIsRaw)> {
         todo!()
     }
 
@@ -360,14 +367,6 @@ impl<'a> Parser<'a> {
 
     pub fn parse_identifier(&mut self) -> ParseResult<'a, Identifier> {
         self.parse_ident_impl(true)
-    }
-
-    pub fn check_identifier(&mut self) -> bool {
-        match self.token.kind {
-            TokenKind::Identifier(ident, IdentIsRaw::No) => !Identifier::new(ident, self.token.span).is_reserved(),
-            TokenKind::Identifier(_, IdentIsRaw::Yes) => true,
-            _ => false,
-        }
     }
 
     pub fn parse_paren_comma_seq<T>(

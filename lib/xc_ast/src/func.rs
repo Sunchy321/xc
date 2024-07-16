@@ -40,8 +40,9 @@ pub enum Safety {
 #[derive(Clone, Debug)]
 pub struct FuncParam {
     pub attrs: ThinVec<Attribute>,
+    pub name: Option<Identifier>,
+    pub ident: Identifier,
     pub ty: P<Type>,
-    pub pattern: P<Pattern>,
     pub span: Span,
 }
 
@@ -97,28 +98,20 @@ impl FuncParam {
             span: this_key.span,
         });
 
-        let (mutability, ty) = match this_param.kind {
-            ThisParamKind::Explicit(mutability, ty) => (mutability, ty),
-            ThisParamKind::Value(mutability) => (mutability, infer_type),
-            ThisParamKind::Reference(mutability) => (
-                Mutability::Immut,
-                P(Type {
-                    kind: TypeKind::Reference(infer_type, mutability),
-                    span,
-                }),
-            ),
+        let ty = match this_param.kind {
+            ThisParamKind::Explicit(_, ty) => ty,
+            ThisParamKind::Value(_) => infer_type,
+            ThisParamKind::Reference(mutability) => P(Type {
+                kind: TypeKind::Reference(infer_type, mutability),
+                span,
+            }),
         };
-
-        let pattern = P(Pattern {
-            kind: PatternKind::Bind(this_key, mutability),
-            assert: None,
-            span
-        });
 
         FuncParam {
             attrs,
             ty,
-            pattern,
+            name: None,
+            ident: this_key,
             span,
         }
     }

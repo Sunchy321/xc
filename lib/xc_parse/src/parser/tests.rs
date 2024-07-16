@@ -132,6 +132,6 @@ fn test_func() {
         string_to_decl("func foo(this) { }".to_string());
         string_to_decl("func foo(&mut this) { }".to_string());
         string_to_decl("func foo(this: int) { }".to_string());
-        // string_to_decl("func foo(a: int) -> void { }".to_string());
+        string_to_decl("func foo(a: int) -> void { }".to_string());
     })
 }
