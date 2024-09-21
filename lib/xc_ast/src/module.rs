@@ -20,3 +20,14 @@ pub struct Visibility {
     pub span: Span,
 }
 
+#[derive(Clone, Debug)]
+pub enum Safety {
+    Unsafe(Span),
+    Default,
+}
+
+#[derive(Clone, Debug)]
+pub enum Constness {
+    Const(Span),
+    Default,
+}

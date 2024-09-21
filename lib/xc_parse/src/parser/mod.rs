@@ -17,6 +17,9 @@ pub mod ty;
 
 pub mod module;
 pub mod func;
+pub mod r#trait;
+
+pub mod generic;
 
 #[cfg(test)]
 mod tests;
@@ -63,6 +66,12 @@ pub enum Recovered {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ConsumeClosingDelim {
+    Yes,
+    No,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AllowPlus {
     Yes,
     No,
 }

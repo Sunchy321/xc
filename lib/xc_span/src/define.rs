@@ -64,6 +64,7 @@ define_symbols! {
         String: "string",
         This: "this",
         Throw: "throw",
+        Trait: "trait",
         True: "true",
         Try: "try",
         Type: "type",

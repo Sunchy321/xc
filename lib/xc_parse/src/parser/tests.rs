@@ -135,3 +135,10 @@ fn test_func() {
         string_to_decl("func foo(a: int) -> void { }".to_string());
     })
 }
+
+#[test]
+fn test_trait() {
+    create_session_globals_then(|| {
+        string_to_decl("trait X { }".to_string());
+    })
+}

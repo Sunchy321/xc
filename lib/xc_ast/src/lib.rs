@@ -18,8 +18,11 @@ pub mod stmt;
 
 pub mod import;
 pub mod func;
+pub mod r#trait;
 pub mod decl;
 pub mod module;
+
+pub mod generic;
 
 pub mod tokenstream;
 pub mod attr;

@@ -5,18 +5,19 @@ use crate::func::Func;
 use crate::import::Import;
 use crate::module::Visibility;
 use crate::ptr::P;
+use crate::r#trait::Trait;
 
 #[derive(Clone, Debug)]
 pub enum DeclKind {
     QualDecl(ThinVec<Qual>),
     Import(Import),
     Func(P<Func>),
+    Trait(P<Trait>),
 }
 
 #[derive(Clone, Debug)]
 pub struct Decl {
     pub kind: DeclKind,
-    pub quals: ThinVec<Qual>,
     pub span: Span,
 }
 

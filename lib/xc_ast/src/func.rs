@@ -3,6 +3,7 @@ use xc_span::{Identifier, Span};
 
 use crate::attr::Attribute;
 use crate::expr::Expr;
+use crate::module::{Constness, Safety};
 use crate::ptr::P;
 use crate::stmt::Block;
 use crate::ty::{Type, TypeKind};
@@ -17,7 +18,7 @@ pub struct Func {
 
 #[derive(Clone, Debug)]
 pub struct FuncSignature {
-    // pub header: FuncHeader,
+    pub header: FuncHeader,
     pub params: ThinVec<FuncParam>,
     pub tail: FuncTail,
 }
@@ -25,12 +26,7 @@ pub struct FuncSignature {
 #[derive(Clone, Debug)]
 pub struct FuncHeader {
     pub safety: Safety,
-}
-
-#[derive(Clone, Debug)]
-pub enum Safety {
-    Unsafe(Span),
-    Default,
+    pub constness: Constness,
 }
 
 #[derive(Clone, Debug)]

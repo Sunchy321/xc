@@ -340,6 +340,14 @@ impl<'a> Parser<'a> {
         todo!()
     }
 
+    pub fn expect_keyword(&mut self, kw: Symbol) -> ParseResult<'a, ()> {
+        if self.eat_keyword(kw) {
+            return Ok(());
+        }
+
+        todo!()
+    }
+
     pub fn expect_semi(&mut self) -> ParseResult<'a, ()> {
         if self.eat(&TokenKind::Semicolon) {
             return Ok(());

@@ -1,6 +1,9 @@
 use thin_vec::{thin_vec, ThinVec};
-use xc_ast::decl::DeclKind;
-use xc_ast::func::{Func, FuncBody, FuncParam, FuncReturn, FuncSignature, FuncTail, FuncThrow, ThisParam, ThisParamKind};
+use xc_ast::decl::{Qual, QualKind};
+use xc_ast::func::{
+    Func, FuncBody, FuncHeader, FuncParam, FuncReturn, FuncSignature, FuncTail, FuncThrow, ThisParam, ThisParamKind
+};
+use xc_ast::module::{Constness, Safety};
 use xc_ast::ptr::P;
 use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
 use xc_ast::Mutability;
@@ -11,33 +14,42 @@ use super::attr::{ForceCollect, TrailingToken};
 use super::parser::Parser;
 use super::ParseResult;
 
-
 impl<'a> Parser<'a> {
-    pub(crate) fn parse_func(&mut self, lo: Span) -> ParseResult<'a, DeclKind> {
+    pub(crate) fn parse_func(&mut self, quals: ThinVec<Qual>, _lo: Span) -> ParseResult<'a, Func> {
+        self.expect_keyword(kw::Func)?;
+
         let ident = self.parse_func_name()?;
 
         // TODO: Generic
 
-        let sig = self.parse_func_header()?;
+        let mut header = FuncHeader {
+            safety: Safety::Default,
+            constness: Constness::Default
+        };
+
+        for qual in quals {
+            match qual.kind {
+                QualKind::Unsafe => header.safety = Safety::Unsafe(qual.span),
+                QualKind::Const => header.constness = Constness::Const(qual.span),
+                _ => todo!()
+            }
+        }
+
+        let sig = self.parse_func_signature(header)?;
 
         // TODO: require_body
         let body = self.parse_func_body(false)?;
 
-        let hi = self.prev_token.span;
-
-        let span = lo.to(hi);
-
-        let func = Func { ident, sig, body };
-
-        Ok(DeclKind::Func(P(func)))
+        Ok(Func { ident, sig, body })
     }
 
     fn parse_func_name(&mut self) -> ParseResult<'a, Identifier> {
         self.parse_identifier()
     }
 
-    fn parse_func_header(&mut self) -> ParseResult<'a, P<FuncSignature>> {
+    fn parse_func_signature(&mut self, header: FuncHeader) -> ParseResult<'a, P<FuncSignature>> {
         Ok(P(FuncSignature {
+            header,
             params: self.parse_func_params()?,
             tail: self.parse_func_tail()?,
         }))
@@ -180,7 +192,7 @@ impl<'a> Parser<'a> {
             name: name_ident,
             ident: param_ident,
             ty,
-            span
+            span,
         })
     }
 

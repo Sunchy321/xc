@@ -6,6 +6,7 @@ use xc_ast::id::OperatorKind;
 use xc_ast::import::{Import, ImportItem, ImportKind, ImportPathSegment};
 use xc_ast::literal::LiteralKind;
 use xc_ast::module::{Module, VisKind, Visibility};
+use xc_ast::ptr::P;
 use xc_ast::token::TokenKind;
 use xc_span::symbol::{kw, op};
 use xc_span::{Identifier, Span};
@@ -28,13 +29,13 @@ impl<'a> Parser<'a> {
 
             Some(DeclKind::QualDecl(quals))
         } else {
-            self.parse_decl_kind(Case::Sensitive)?
+            self.parse_decl_kind(quals, Case::Sensitive)?
         };
 
         if let Some(kind) = kind {
             let span = lo.to(self.prev_token.span);
 
-            let decl = Decl { kind, quals, span };
+            let decl = Decl { kind, span };
 
             Ok(Some(decl))
         } else {
@@ -114,13 +115,15 @@ impl<'a> Parser<'a> {
         Ok(Some(vis))
     }
 
-    fn parse_decl_kind(&mut self, case: Case) -> ParseResult<'a, Option<DeclKind>> {
+    fn parse_decl_kind(&mut self, quals: ThinVec<Qual>, case: Case) -> ParseResult<'a, Option<DeclKind>> {
         let lo = self.token.span;
 
-        let info = if self.eat_keyword_case(kw::Import, case) {
-            self.parse_import(lo)?
-        } else if self.eat_keyword_case(kw::Func, case) {
-            self.parse_func(lo)?
+        let info = if self.check_keyword_case(kw::Import, case) {
+            self.parse_import(quals, lo)?
+        } else if self.check_keyword_case(kw::Func, case) {
+            DeclKind::Func(P(self.parse_func(quals, lo)?))
+        } else if self.check_keyword_case(kw::Trait, case) {
+            DeclKind::Trait(P(self.parse_trait(quals, lo)?))
         } else {
             return Ok(None);
         };
@@ -128,7 +131,7 @@ impl<'a> Parser<'a> {
         Ok(Some(info))
     }
 
-    fn parse_import(&mut self, lo: Span) -> ParseResult<'a, DeclKind> {
+    fn parse_import(&mut self, _quals: ThinVec<Qual>, lo: Span) -> ParseResult<'a, DeclKind> {
         let (path, ..) = self.parse_seq_before(
             &[&TokenKind::Colon, &TokenKind::Semicolon],
             SequenceSeparator::new(TokenKind::Op(op::Dot)),
@@ -243,10 +246,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type_decl(&mut self) -> ParseResult<'a, DeclKind> {
-        todo!()
-    }
-
-    fn parse_trait(&mut self) -> ParseResult<'a, DeclKind> {
         todo!()
     }
 
