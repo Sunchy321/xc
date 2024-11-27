@@ -32,7 +32,7 @@ pub struct Parser<'a> {
     pub(crate) restrictions: Restrictions,
     expected_tokens: Vec<ExpectTokenKind>,
 
-    token_cursor: TokenCursor,
+    pub(crate) token_cursor: TokenCursor,
     next_call_count: usize,
 }
 

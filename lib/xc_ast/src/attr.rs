@@ -1,7 +1,6 @@
 use xc_span::{Span, Symbol};
 
 use crate::ast::DelimitedArgs;
-use crate::expr::Expr;
 use crate::ptr::P;
 use crate::token::CommentKind;
 
@@ -11,7 +10,7 @@ pub enum AttrKind {
     Normal(P<NormalAttr>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttrStyle {
     Outer,
     Inner,
@@ -25,7 +24,7 @@ pub struct Attribute {
 }
 
 #[derive(Clone, Debug)]
-pub enum NormalAttrArgs {
+pub enum AttrArgs {
     Empty,
     Delimited(DelimitedArgs),
 }
@@ -33,6 +32,5 @@ pub enum NormalAttrArgs {
 #[derive(Clone, Debug)]
 pub struct NormalAttr {
     pub name: Symbol,
-    pub args: NormalAttrArgs,
-    // pub tokens:
+    pub args: AttrArgs,
 }

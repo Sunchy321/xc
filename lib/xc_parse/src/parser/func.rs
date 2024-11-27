@@ -72,7 +72,7 @@ impl<'a> Parser<'a> {
     fn parse_func_param(&mut self, first_param: bool) -> ParseResult<'a, FuncParam> {
         let lo = self.token.span;
 
-        let attrs = self.parse_attr_list()?;
+        let attrs = self.parse_outer_attrs()?;
 
         self.collect_tokens(attrs, ForceCollect::No, |this, attrs| {
             if let Some(mut param) = this.parse_self_param()? {
