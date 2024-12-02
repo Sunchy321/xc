@@ -1,5 +1,5 @@
 use thin_vec::ThinVec;
-use xc_span::{Identifier, Span};
+use xc_span::{Identifier, Span, Symbol};
 
 use crate::expr::Expr;
 use crate::ptr::P;
@@ -8,12 +8,12 @@ use crate::Mutability;
 
 #[derive(Clone, Debug)]
 pub enum PatternKind {
+    Paren(P<Pattern>),
     Wildcard,
     Expr(P<Expr>),
     Bind(Identifier, Mutability),
     Array(ThinVec<ArrayPatternItem>),
-    Tuple(ThinVec<TuplePatternItem>),
-    Object(ThinVec<ObjectPatternItem>),
+    Struct(ThinVec<StructPatternItem>),
 }
 
 #[derive(Clone, Debug)]
@@ -46,14 +46,9 @@ pub enum ArrayPatternItem {
 }
 
 #[derive(Clone, Debug)]
-pub enum TuplePatternItem {
-    Item(P<Pattern>),
-    Expand(Option<P<Pattern>>),
-}
-
-#[derive(Clone, Debug)]
-pub enum ObjectPatternItem {
-    Field(Identifier, P<Pattern>),
+pub enum StructPatternItem {
+    Ordinal(P<Pattern>),
+    Named(Symbol, P<Pattern>),
     Expand(Option<P<Pattern>>),
 }
 

@@ -1,10 +1,10 @@
+use thin_vec::thin_vec;
 use xc_ast::literal::LiteralKind;
-use xc_ast::module::VisKind;
 use xc_ast::ptr::P;
-use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
-use xc_ast::ty::{Type, TypeKind};
+use xc_ast::token::{Delimiter, TokenKind};
+use xc_ast::ty::{Member, StructType, Type, TypeKind};
 use xc_span::symbol::{kw, op};
-use xc_span::{Span, Symbol};
+use xc_span::Span;
 
 use super::{parser::Parser, HasTrailing, ParseResult};
 
@@ -33,8 +33,6 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_type_prefix(&mut self) -> ParseResult<'a, P<Type>> {
-        use TokenKind::*;
-
         let lo = self.token.span;
 
         let kind = if self.eat_keyword(kw::Class) {
@@ -103,7 +101,7 @@ impl<'a> Parser<'a> {
             kind
         } else {
             match self.token.kind {
-                OpenDelim(Delimiter::Paren) => self.parse_type_tuple_or_paren(lo)?,
+                OpenDelim(Delimiter::Paren) => self.parse_type_struct_or_paren()?,
                 SymbolOpen => unimplemented!("symbol type"),
 
                 Literal(sym) => match sym.kind {
@@ -127,18 +125,28 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    pub fn parse_type_tuple_or_paren(&mut self, lo: Span) -> ParseResult<'a, TypeKind> {
-        let (types, trailing) = self.parse_paren_comma_seq(|p| {
-            let ty = p.parse_type()?;
-            Ok(ty)
+    pub fn parse_type_struct_or_paren(&mut self) -> ParseResult<'a, TypeKind> {
+        let (members, trailing) = self.parse_paren_comma_seq(|this| {
+            let is_mut = this.eat_keyword(kw::Mut);
+
+            let item = if let Some(key) = this.parse_key()? {
+                Member::Named(key, this.parse_type()?, is_mut)
+            } else {
+                Member::Ordinal(this.parse_type()?, is_mut)
+            };
+
+            Ok(item)
         })?;
 
-        if types.len() == 1 && matches!(trailing, HasTrailing::No) {
-            let ty = types.into_iter().next().unwrap();
-
-            Ok(TypeKind::Paren(ty))
+        let kind = if members.len() == 1 && matches!(trailing, HasTrailing::No) {
+            match members.into_iter().next().unwrap() {
+                Member::Ordinal(ty, _) => TypeKind::Paren(ty),
+                ty => TypeKind::Struct(StructType { members: thin_vec![ty] }),
+            }
         } else {
-            Ok(TypeKind::Tuple(types))
-        }
+            TypeKind::Struct(StructType { members })
+        };
+
+        Ok(kind)
     }
 }

@@ -89,6 +89,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_struct_item(&mut self) -> ParseResult<'a, StructItem> {
+        let item = if self.eat(&TokenKind::DotDotDot) {
+            StructItem::Expansion(self.parse_expr()?)
+        } else if let Some(key) = self.parse_key()?
+        {
+            StructItem::Named(key, self.parse_expr()?)
+        }
+        else {
+            StructItem::Ordinal(self.parse_expr()?)
+        };
+
+        Ok(item)
+    }
+
     fn parse_expr_impl(&mut self) -> ParseResult<'a, P<Expr>> {
         // 1. collect primary exprs and operators
         // 2. convert . xxx into an operator
@@ -138,8 +152,8 @@ impl<'a> Parser<'a> {
                             FuncCall(Arguments::from_expr_list(thin_vec![e.clone()]), thin_vec![])
                         }
                         ExprKind::Array(a) => Subscript(Arguments::from_expr_items(a.clone())),
-                        ExprKind::Tuple(t) => {
-                            FuncCall(Arguments::from_expr_items(t.clone()), thin_vec![])
+                        ExprKind::Struct(t) => {
+                            FuncCall(Arguments::from_struct_items(t.clone()), thin_vec![])
                         }
                         ExprKind::Block(b) => FuncCallTrailing(b.clone()),
                         ExprKind::AnonEnumerator(symbol) => MemberAccess(*symbol),
@@ -849,7 +863,7 @@ impl<'a> Parser<'a> {
         let kind = if self.eat_keyword(kw::Await) {
             ExprAtomKind::DotAwait
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Paren)) {
-            let expr = self.parse_expr_tuple_parens()?;
+            let expr = self.parse_expr_struct_parens()?;
             ExprAtomKind::MemberDynamicAccess(expr)
         } else if let Some((ident, ..)) = self.token.to_identifier()
             && !self.token.is_reserved_ident()
@@ -896,9 +910,9 @@ impl<'a> Parser<'a> {
         } else if self.check_path() {
             self.parse_expr_path()
         } else if self.check(&OpenDelim(Delimiter::Paren)) {
-            self.parse_expr_tuple_parens()
+            self.parse_expr_struct_parens()
         } else if self.check(&OpenDelim(Delimiter::Brace)) {
-            self.parse_expr_block_struct()
+            self.parse_expr_block()
         } else if self.check(&OpenDelim(Delimiter::Bracket)) {
             self.parse_expr_array_dict()
         } else if self.eat_keyword(kw::If) {
@@ -932,17 +946,17 @@ impl<'a> Parser<'a> {
         self.maybe_recover_from_bad_qpath(expr)
     }
 
-    fn parse_expr_tuple_parens(&mut self) -> ParseResult<'a, P<Expr>> {
+    fn parse_expr_struct_parens(&mut self) -> ParseResult<'a, P<Expr>> {
         use TokenKind::*;
 
         let lo = self.token.span;
 
         self.expect(&OpenDelim(Delimiter::Paren))?;
 
-        let (exprs, has_trailing) = match self.parse_seq_to_end(
+        let (items, has_trailing) = match self.parse_seq_to_end(
             &CloseDelim(Delimiter::Paren),
             SequenceSeparator::new(Comma),
-            |p| p.parse_expr_item(),
+            |p| p.parse_struct_item(),
         ) {
             Ok(v) => v,
             Err(err) => {
@@ -951,31 +965,19 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let kind = if exprs.len() == 1 && !matches!(has_trailing, HasTrailing::Yes) {
-            if let ExprItem::Expr(e) = exprs.iter().next().unwrap() {
+        let kind = if items.len() == 1 && !matches!(has_trailing, HasTrailing::Yes) {
+            if let StructItem::Ordinal(e) = items.iter().next().unwrap() {
                 ExprKind::Paren(e.clone())
             } else {
-                ExprKind::Tuple(exprs)
+                ExprKind::Struct(items)
             }
         } else {
-            ExprKind::Tuple(exprs)
+            ExprKind::Struct(items)
         };
 
         let expr = self.make_expr(kind, lo.to(self.prev_token.span));
 
         self.maybe_recover_from_bad_qpath(expr)
-    }
-
-    fn parse_expr_block_struct(&mut self) -> ParseResult<'a, P<Expr>> {
-        if self.look_ahead(1, |t| t.kind == TokenKind::DotDotDot) {
-            self.parse_struct_literal()
-        } else if self.look_ahead(1, |t| t.is_identifier())
-            && self.look_ahead(2, |t| t.kind == TokenKind::Colon)
-        {
-            self.parse_struct_literal()
-        } else {
-            self.parse_expr_block()
-        }
     }
 
     fn parse_struct_literal(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -989,30 +991,6 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_struct_item(&mut self) -> ParseResult<'a, StructItem> {
-        if self.token.kind == TokenKind::DotDotDot {
-            self.next();
-
-            let expr = self.parse_expr()?;
-
-            return Ok(StructItem::Expansion(expr));
-        }
-
-        if let Some((ident, is_raw)) = self.token.to_identifier()
-            && self.look_ahead(1, |t| t.kind == TokenKind::Colon)
-        {
-            let key = ident.name;
-
-            self.next();
-            self.next();
-
-            let expr = self.parse_expr()?;
-
-            return Ok(StructItem::KeyValue(key, expr));
-        }
-
-        todo!()
-    }
 
     fn parse_expr_array_dict(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.token.span;

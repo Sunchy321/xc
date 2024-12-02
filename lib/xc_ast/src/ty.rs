@@ -18,8 +18,7 @@ pub enum TypeKind {
 
     Optional(P<Type>),
     Array(P<Type>),
-    Tuple(ThinVec<P<Type>>),
-    Object(ObjectType),
+    Struct(StructType),
     Dict(P<Type>, P<Type>),
     Reference(P<Type>, Mutability),
 
@@ -41,13 +40,12 @@ pub struct Type {
 }
 
 #[derive(Clone, Debug)]
-pub struct ObjectType {
-    pub fields: ThinVec<Field>,
+pub struct StructType {
+    pub members: ThinVec<Member>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Field {
-    pub name: String,
-    pub type_id: P<Type>,
-    pub is_mut: bool,
+pub enum Member {
+    Ordinal(P<Type>, bool),
+    Named(Symbol, P<Type>, bool),
 }

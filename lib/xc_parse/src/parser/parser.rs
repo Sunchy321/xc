@@ -377,6 +377,18 @@ impl<'a> Parser<'a> {
         self.parse_ident_impl(true)
     }
 
+    pub fn parse_key(&mut self) -> ParseResult<'a, Option<Symbol>> {
+        if let Some((ident, _)) = self.token.to_identifier()
+            && self.look_ahead(1, |t| t.kind == TokenKind::Colon)
+        {
+            self.next();
+            self.next();
+            Ok(Some(ident.name))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn parse_paren_comma_seq<T>(
         &mut self,
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,

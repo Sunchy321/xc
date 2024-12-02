@@ -41,6 +41,8 @@ fn test_expr() {
         string_to_expr("(123)".to_string());
         string_to_expr("(123,)".to_string());
         string_to_expr("(123, 456)".to_string());
+        string_to_expr("(123, 456, a: 789)".to_string());
+        string_to_expr("(123, ...y, 456, a: 789, ...x, d: xyz)".to_string());
         string_to_expr("123(456, 789)".to_string());
         string_to_expr("if 1 then 2 else if 3 then 4 else 5".to_string());
         string_to_expr("break'outer 2".to_string());
@@ -57,8 +59,6 @@ fn test_block() {
         string_to_expr("{ 1 }".to_string());
         string_to_expr("{ 1; 2 }".to_string());
         string_to_expr("{ 1 + 2 }".to_string());
-        string_to_expr("{ a: 1 }".to_string());
-        string_to_expr("{ ...1 }".to_string());
     });
 }
 
@@ -96,14 +96,12 @@ fn test_pattern() {
         string_to_pattern("[a, ..., z]".to_string());
         string_to_pattern("[a, ...let m, z]".to_string());
         string_to_pattern("let [a, ..., z]".to_string());
-        string_to_pattern("(a, b)".to_string());
-        string_to_pattern("let (a, b)".to_string());
-        string_to_pattern("(a, let b)".to_string());
-        string_to_pattern("{ k: v }".to_string());
-        string_to_pattern("{ k }".to_string());
-        string_to_pattern("{ k: let v }".to_string());
-        string_to_pattern("let { k: v }".to_string());
-        string_to_pattern("let { k }".to_string());
+        string_to_pattern("(a, b, c: d)".to_string());
+        string_to_pattern("let (a, b, c: d)".to_string());
+        string_to_pattern("(a, let b, ...x, c: d)".to_string());
+        string_to_pattern("(k: v)".to_string());
+        string_to_pattern("(k: let v)".to_string());
+        string_to_pattern("let ( k: v )".to_string());
     })
 }
 

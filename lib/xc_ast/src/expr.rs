@@ -21,9 +21,7 @@ pub enum ExprKind {
     Path(Path),
     /// Array literal (`[1, 2, 3]`)
     Array(ThinVec<ExprItem>),
-    /// Tuple literal (`(1, 2, 3)`)
-    Tuple(ThinVec<ExprItem>),
-    /// Struct literal (`{a: 1, b: 2}`)
+    /// Struct literal (`(a: 1, b: 2)`)
     Struct(ThinVec<StructItem>),
     /// Dictionary literal (`[ a: 1, b: 2 ]`)
     Dict(ThinVec<DictItem>),
@@ -182,7 +180,8 @@ pub enum ExprItem {
 
 #[derive(Clone, Debug)]
 pub enum StructItem {
-    KeyValue(Symbol, P<Expr>),
+    Ordinal(P<Expr>),
+    Named(Symbol, P<Expr>),
     Expansion(P<Expr>),
 }
 
@@ -193,31 +192,52 @@ pub enum DictItem {
 }
 
 #[derive(Clone, Debug)]
-pub struct Arguments {
-    pub unnamed_args: ThinVec<ExprItem>,
-    pub named_args: ThinVec<(String, Expr)>,
+pub struct Arguments(pub ThinVec<Argument>);
+
+#[derive(Clone, Debug)]
+pub enum Argument {
+    Ordinal(P<Expr>),
+    Named(Symbol, P<Expr>),
+    Expansion(P<Expr>),
 }
 
 impl Arguments {
     pub fn new() -> Self {
-        Self {
-            unnamed_args: ThinVec::new(),
-            named_args: ThinVec::new(),
-        }
+        Self(ThinVec::new())
     }
 
     pub fn from_expr_items(exprs: ThinVec<ExprItem>) -> Self {
-        Self {
-            unnamed_args: exprs,
-            named_args: ThinVec::new(),
-        }
+        Self(
+            exprs
+                .into_iter()
+                .map(|e| match e {
+                    ExprItem::Expr(e) => Argument::Ordinal(e),
+                    ExprItem::Expansion(e) => Argument::Expansion(e),
+                })
+                .collect(),
+        )
     }
 
     pub fn from_expr_list(exprs: ThinVec<P<Expr>>) -> Self {
-        Self {
-            unnamed_args: exprs.into_iter().map(|e| ExprItem::Expr(e)).collect(),
-            named_args: ThinVec::new(),
-        }
+        Self(
+            exprs
+                .into_iter()
+                .map(Argument::Ordinal)
+                .collect(),
+        )
+    }
+
+    pub fn from_struct_items(items: ThinVec<StructItem>) -> Self {
+        Self(
+            items
+                .into_iter()
+                .map(|i| match i {
+                    StructItem::Ordinal(e) => Argument::Ordinal(e),
+                    StructItem::Named(s, e) => Argument::Named(s, e),
+                    StructItem::Expansion(e) => Argument::Expansion(e),
+                })
+                .collect(),
+        )
     }
 }
 
