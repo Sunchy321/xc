@@ -118,7 +118,9 @@ impl<'a> Parser<'a> {
     fn parse_decl_kind(&mut self, quals: ThinVec<Qual>, case: Case) -> ParseResult<'a, Option<DeclKind>> {
         let lo = self.token.span;
 
-        let info = if self.check_keyword_case(kw::Import, case) {
+        let info = if self.check_keyword_case(kw::Module, case) {
+            self.parse_module_decl(quals)?
+        } else if self.check_keyword_case(kw::Import, case) {
             self.parse_import(quals, lo)?
         } else if self.check_keyword_case(kw::Func, case) {
             DeclKind::Func(P(self.parse_func(quals, lo)?))
@@ -129,6 +131,12 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Some(info))
+    }
+
+    fn parse_module_decl(&mut self, quals: ThinVec<Qual>) -> ParseResult<'a, DeclKind> {
+        
+
+        todo!()
     }
 
     fn parse_import(&mut self, _quals: ThinVec<Qual>, lo: Span) -> ParseResult<'a, DeclKind> {
