@@ -12,8 +12,6 @@ pub enum UnqualID {
     SymbolLit(Symbol),
     /// `init`
     Init,
-    /// `deinit`
-    Deinit,
     /// `operator infix+`
     Operator(OperatorID),
     /// `operator ""s`

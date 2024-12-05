@@ -21,7 +21,6 @@ define_symbols! {
         Cmp: "cmp",
         Const: "const",
         Continue: "continue",
-        Deinit: "deinit",
         Defer: "defer",
         Do: "do",
         Dyn: "dyn",
