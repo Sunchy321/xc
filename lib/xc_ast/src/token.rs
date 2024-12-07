@@ -88,6 +88,25 @@ impl TokenKind {
             _ => false,
         }
     }
+
+    pub fn break_two_op(&self, n: usize) -> Option<(TokenKind, TokenKind)> {
+        use TokenKind::*;
+
+        assert!(n == 1 || n == 2);
+
+        if let Op(op) = self {
+            let str = op.as_str();
+
+            let first = &str[..n];
+            let rest = &str[n..];
+
+            if Symbol::has_intern(first) && Symbol::has_intern(rest) {
+                return Some((Op(Symbol::intern(first)), Op(Symbol::intern(rest))));
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -120,7 +139,7 @@ impl Token {
     pub fn is_normal_ident_and(&self, pred: impl FnOnce(Identifier) -> bool) -> bool {
         match self.to_identifier() {
             Some((id, IdentIsRaw::No)) => pred(id),
-            _ => false
+            _ => false,
         }
     }
 
@@ -197,7 +216,10 @@ impl Token {
 }
 
 fn ident_can_begin_expr(name: Symbol, is_raw: IdentIsRaw, span: Span) -> bool {
-    let token = Token { kind: TokenKind::Identifier(name, is_raw), span };
+    let token = Token {
+        kind: TokenKind::Identifier(name, is_raw),
+        span,
+    };
 
     !token.is_reserved_ident()
         || [

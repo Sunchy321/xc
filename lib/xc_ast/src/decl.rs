@@ -25,12 +25,13 @@ pub struct Decl {
 pub enum QualKind {
     Vis(Visibility),
 
-    Extern,
     Async,
-    Static,
+    Auto,
     Const,
-    Unsafe,
+    Extern,
     Partial,
+    Static,
+    Unsafe,
 }
 
 #[derive(Clone, Debug)]

@@ -68,12 +68,13 @@ impl<'a> Parser<'a> {
             QualKind::Vis(vis)
         } else {
             let mut check_kind = || {
-                check_qual!(Extern);
+                check_qual!(Auto);
                 check_qual!(Async);
-                check_qual!(Static);
                 check_qual!(Const);
-                check_qual!(Unsafe);
+                check_qual!(Extern);
                 check_qual!(Partial);
+                check_qual!(Static);
+                check_qual!(Unsafe);
 
                 None
             };
@@ -134,7 +135,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_module_decl(&mut self, quals: ThinVec<Qual>) -> ParseResult<'a, DeclKind> {
-        
+
 
         todo!()
     }

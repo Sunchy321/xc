@@ -1,12 +1,35 @@
-use xc_ast::generic::{BoundPolarity, GenericBound, GenericBounds, TraitBoundQualifiers};
+use thin_vec::ThinVec;
+use xc_ast::generic::{BoundPolarity, Generic, GenericBound, GenericBounds, TraitBoundQualifiers, WhereClause};
 use xc_ast::path::PathStyle;
 use xc_ast::token::{Delimiter, TokenKind};
-use xc_span::symbol::{kw, op};
+use xc_span::symbol::op;
 
 use super::parser::Parser;
 use super::{AllowPlus, ParseResult};
 
 impl<'a> Parser<'a> {
+    pub(crate) fn parse_generic(&mut self) -> ParseResult<'a, Generic> {
+        let lo = self.token.span;
+
+        let (params, span) = if self.eat_less() {
+            todo!()
+        } else {
+            (ThinVec::new(), self.prev_token.span.shrink_to_hi())
+        };
+
+        let generic = Generic {
+            params,
+            where_clause: WhereClause {
+                has_where_token: false,
+                predicates: ThinVec::new(),
+                span: self.prev_token.span.shrink_to_hi(),
+            },
+            span,
+        };
+
+        Ok(generic)
+    }
+
     pub(crate) fn parse_generic_bounds(&mut self) -> ParseResult<'a, GenericBounds>{
         self.parse_generic_bounds_impl(AllowPlus::Yes)
     }
@@ -21,7 +44,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        
+
         Ok(bounds)
     }
 

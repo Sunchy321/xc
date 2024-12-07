@@ -13,7 +13,7 @@ use xc_ast::{
     tokenstream::{Spacing, TokenStream, TokenTree},
 };
 use xc_error::diag::Diagnostic;
-use xc_span::{Identifier, Symbol};
+use xc_span::{symbol::op, Identifier, Symbol};
 
 use super::{
     cursor::TokenCursor, Case, ConsumeClosingDelim, ExpectTokenKind, HasTrailing, ParseResult,
@@ -33,7 +33,10 @@ pub struct Parser<'a> {
     expected_tokens: Vec<ExpectTokenKind>,
 
     pub(crate) token_cursor: TokenCursor,
+
     next_call_count: usize,
+    break_last_token: usize,
+    unmatched_angle_bracket_count: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -51,7 +54,10 @@ impl<'a> Parser<'a> {
                 tree_cursor: stream.into_trees(),
                 stack: Vec::new(),
             },
+
             next_call_count: 0,
+            break_last_token: 0,
+            unmatched_angle_bracket_count: 0,
         };
 
         parser.next();
@@ -69,13 +75,21 @@ impl<'a> Parser<'a> {
 
     pub fn next(&mut self) {
         let mut next_token = self.token_cursor.next();
+
         self.next_call_count += 1;
-        // TODO: break token?
+        self.break_last_token = 0;
 
         if next_token.0.span.is_dummy() {}
 
         self.prev_token = mem::replace(&mut self.token, next_token.0);
         self.spacing = next_token.1;
+    }
+
+    fn next_with(&mut self, (next_token, next_spacing): (Token, Spacing)) {
+        self.prev_token = mem::replace(&mut self.token, next_token);
+        self.spacing = next_spacing;
+
+        self.expected_tokens.clear();
     }
 
     pub fn look_ahead<R>(&self, dist: usize, looker: impl FnOnce(&Token) -> R) -> R {
@@ -206,6 +220,49 @@ impl<'a> Parser<'a> {
 
             _ => None,
         }
+    }
+
+    fn break_and_eat(&mut self, expected: TokenKind) -> bool {
+        if self.token.kind == expected {
+            self.next();
+            return true;
+        }
+
+        match self.token.kind.break_two_op(1) {
+            Some((first, rest)) if first == expected => {
+                let first_span = self.session.source_map().start_point(self.token.span);
+                let rest_span = self.token.span.with_lo(first_span.hi);
+
+                self.token = Token {
+                    kind: first,
+                    span: first_span,
+                };
+
+                let rest = Token {
+                    kind: rest,
+                    span: rest_span,
+                };
+
+                self.break_last_token += 1;
+
+                self.next_with((rest, self.spacing));
+                true
+            }
+            _ => {
+                self.expected_tokens.push(ExpectTokenKind::Token(expected));
+                false
+            }
+        }
+    }
+
+    pub(crate) fn eat_less(&mut self) -> bool {
+        let ate = self.break_and_eat(TokenKind::Op(op::Less));
+
+        if ate {
+            self.unmatched_angle_bracket_count += 1;
+        }
+
+        ate
     }
 
     pub(crate) fn consume_block(&mut self, delim: Delimiter, consume_close: ConsumeClosingDelim) {

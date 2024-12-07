@@ -1,8 +1,11 @@
+use thin_vec::ThinVec;
 use xc_span::{Span, Symbol};
 
 use crate::ast::DelimitedArgs;
 use crate::ptr::P;
 use crate::token::CommentKind;
+
+pub type AttrVec = ThinVec<Attribute>;
 
 #[derive(Clone, Debug)]
 pub enum AttrKind {
