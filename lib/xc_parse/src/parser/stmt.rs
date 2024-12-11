@@ -18,13 +18,6 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_block(&mut self) -> ParseResult<'a, P<Block>> {
-        self.parse_block_impl(true)
-    }
-
-    pub(crate) fn parse_block_impl(
-        &mut self,
-        maybe_struct_literal: bool,
-    ) -> ParseResult<'a, P<Block>> {
         if !self.eat(&TokenKind::OpenDelim(Delimiter::Brace)) {
             unimplemented!();
         }

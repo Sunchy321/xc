@@ -229,7 +229,7 @@ impl<'a> Parser<'a> {
             self.expect_semi()?;
             FuncBody::Semicolon
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
-            self.parse_block_impl(false).map(FuncBody::Block)?
+            self.parse_block().map(FuncBody::Block)?
         } else if self.eat(&TokenKind::FatArrow) {
             let expr = self.parse_expr()?;
 
