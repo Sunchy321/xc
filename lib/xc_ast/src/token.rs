@@ -66,7 +66,7 @@ pub enum TokenKind {
 
     Identifier(Symbol, IdentIsRaw),
 
-    LambdaArgUnnamed(u32),
+    LambdaArgOrdinal(u32),
     LambdaArgNamed(Symbol),
 
     Eof,
@@ -185,7 +185,7 @@ impl Token {
 
             Identifier(name, is_raw) => ident_can_begin_expr(name, is_raw, self.span),
 
-            LambdaArgUnnamed(..) => true,
+            LambdaArgOrdinal(..) => true,
             LambdaArgNamed(..) => true,
 
             Eof => false,

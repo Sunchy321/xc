@@ -13,6 +13,8 @@ use crate::ty::{Type, TypeKind};
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
+    /// Placeholder (`_`)
+    Placeholder,
     /// Paren (`(e)`)
     Paren(P<Expr>),
     /// A literal (`0`, `true`, `"hello"`, etc.)
@@ -32,7 +34,7 @@ pub enum ExprKind {
     /// `$`
     Dollar,
     /// `$0`
-    LambdaArgUnnamed(u32),
+    LambdaArgOrdinal(u32),
     /// `$id`
     LambdaArgNamed(Symbol),
     /// `.Yes`
@@ -176,6 +178,7 @@ impl fmt::Debug for Expr {
 pub enum ExprItem {
     Expr(P<Expr>),
     Expansion(P<Expr>),
+    ExpansionPlaceHolder,
 }
 
 #[derive(Clone, Debug)]
@@ -183,6 +186,7 @@ pub enum StructItem {
     Ordinal(P<Expr>),
     Named(Symbol, P<Expr>),
     Expansion(P<Expr>),
+    ExpansionPlaceHolder,
 }
 
 #[derive(Clone, Debug)]
@@ -213,18 +217,16 @@ impl Arguments {
                 .map(|e| match e {
                     ExprItem::Expr(e) => Argument::Ordinal(e),
                     ExprItem::Expansion(e) => Argument::Expansion(e),
+                    ExprItem::ExpansionPlaceHolder => {
+                        todo!("ExpansionPlaceHolder in Arguments")
+                    }
                 })
                 .collect(),
         )
     }
 
     pub fn from_expr_list(exprs: ThinVec<P<Expr>>) -> Self {
-        Self(
-            exprs
-                .into_iter()
-                .map(Argument::Ordinal)
-                .collect(),
-        )
+        Self(exprs.into_iter().map(Argument::Ordinal).collect())
     }
 
     pub fn from_struct_items(items: ThinVec<StructItem>) -> Self {
@@ -235,6 +237,9 @@ impl Arguments {
                     StructItem::Ordinal(e) => Argument::Ordinal(e),
                     StructItem::Named(s, e) => Argument::Named(s, e),
                     StructItem::Expansion(e) => Argument::Expansion(e),
+                    StructItem::ExpansionPlaceHolder => {
+                        todo!("ExpansionPlaceHolder in Arguments")
+                    }
                 })
                 .collect(),
         )

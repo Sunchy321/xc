@@ -144,7 +144,7 @@ impl<'a, 'src> Lexer<'a, 'src> {
                     let id = self.str_from(start + BytePos(1));
 
                     match id.parse::<u32>() {
-                        Ok(n) => TokenKind::LambdaArgUnnamed(n),
+                        Ok(n) => TokenKind::LambdaArgOrdinal(n),
                         Err(_) => {
                             TokenKind::LambdaArgNamed(Symbol::intern(nfc_normalize(id).as_str()))
                         }

@@ -91,12 +91,14 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_item(&mut self) -> ParseResult<'a, StructItem> {
         let item = if self.eat(&TokenKind::DotDotDot) {
-            StructItem::Expansion(self.parse_expr()?)
-        } else if let Some(key) = self.parse_key()?
-        {
+            if self.check(&TokenKind::Comma) {
+                StructItem::ExpansionPlaceHolder
+            } else {
+                StructItem::Expansion(self.parse_expr()?)
+            }
+        } else if let Some(key) = self.parse_key()? {
             StructItem::Named(key, self.parse_expr()?)
-        }
-        else {
+        } else {
             StructItem::Ordinal(self.parse_expr()?)
         };
 
@@ -889,7 +891,11 @@ impl<'a> Parser<'a> {
 
         let lo = self.token.span;
 
-        if let Literal(lit) = self.token.kind {
+        if self.eat_keyword(kw::Underscore) {
+            let expr = self.make_expr(ExprKind::Placeholder, lo);
+
+            Ok(expr)
+        } else if let Literal(lit) = self.token.kind {
             self.next();
 
             let expr = self.make_expr(ExprKind::Literal(lit), lo);
@@ -901,10 +907,10 @@ impl<'a> Parser<'a> {
             let expr = self.make_expr(ExprKind::LambdaArgNamed(sym), lo);
 
             Ok(expr)
-        } else if let LambdaArgUnnamed(index) = self.token.kind {
+        } else if let LambdaArgOrdinal(index) = self.token.kind {
             self.next();
 
-            let expr = self.make_expr(ExprKind::LambdaArgUnnamed(index), lo);
+            let expr = self.make_expr(ExprKind::LambdaArgOrdinal(index), lo);
 
             Ok(expr)
         } else if self.check_path() {
@@ -991,7 +997,6 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-
     fn parse_expr_array_dict(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.token.span;
 
@@ -1050,6 +1055,7 @@ impl<'a> Parser<'a> {
                 }
 
                 ArrayDictItem::Expansion(..) => {}
+                ArrayDictItem::ExpansionPlaceHolder => {}
             }
         }
 
@@ -1063,6 +1069,7 @@ impl<'a> Parser<'a> {
                         ArrayDictItem::Item(expr) => ExprItem::Expr(expr),
                         ArrayDictItem::KeyValue(_, _) => unreachable!(),
                         ArrayDictItem::Expansion(expr) => ExprItem::Expansion(expr),
+                        ArrayDictItem::ExpansionPlaceHolder => ExprItem::ExpansionPlaceHolder,
                     })
                     .collect();
 
@@ -1080,6 +1087,9 @@ impl<'a> Parser<'a> {
                         ArrayDictItem::Item(_) => unreachable!(),
                         ArrayDictItem::KeyValue(key, value) => DictItem::KeyValue(key, value),
                         ArrayDictItem::Expansion(expr) => DictItem::Expansion(expr),
+                        ArrayDictItem::ExpansionPlaceHolder => {
+                            todo!("ExpansionPlaceHolder in dict")
+                        },
                     })
                     .collect();
 
@@ -1101,6 +1111,7 @@ impl<'a> Parser<'a> {
                         ArrayDictItem::Item(_) => unreachable!(),
                         ArrayDictItem::KeyValue(_, _) => unreachable!(),
                         ArrayDictItem::Expansion(expr) => ExprItem::Expansion(expr),
+                        ArrayDictItem::ExpansionPlaceHolder => ExprItem::ExpansionPlaceHolder,
                     })
                     .collect();
 
@@ -1112,11 +1123,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_array_dict_item(&mut self) -> ParseResult<'a, ArrayDictItem> {
-        if self.token.kind == TokenKind::DotDotDot {
-            self.next();
-            let expr = self.parse_expr()?;
+        if self.eat(&TokenKind::DotDotDot) {
+            let item = if self.check(&TokenKind::Comma) {
+                ArrayDictItem::ExpansionPlaceHolder
+            } else {
+                ArrayDictItem::Expansion(self.parse_expr()?)
+            };
 
-            return Ok(ArrayDictItem::Expansion(expr));
+            return Ok(item);
         }
 
         let expr = self.parse_expr()?;
@@ -1527,4 +1541,5 @@ enum ArrayDictItem {
     Item(P<Expr>),
     KeyValue(P<Expr>, P<Expr>),
     Expansion(P<Expr>),
+    ExpansionPlaceHolder,
 }
