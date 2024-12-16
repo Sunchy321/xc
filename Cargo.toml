@@ -1,5 +1,5 @@
 [workspace]
-members = [ "lib/xc_ast", "lib/xc_error", "lib/xc_lexer", "lib/xc_macro", "lib/xc_parse", "lib/xc_span"]
+members = [ "lib/xc_ast", "lib/xc_error", "lib/xc_lexer", "lib/xc_macro", "lib/xc_parse", "lib/xc_span", "lib/xc_driver"]
 
 [package]
 name = "xc"
@@ -11,3 +11,4 @@ edition = "2021"
 [dependencies]
 xc_parse = { version = "0.1.0", path = "lib/xc_parse" }
 xc_span = { version = "0.1.0", path = "lib/xc_span" }
+xc_driver = { version = "0.1.0", path = "lib/xc_driver" }

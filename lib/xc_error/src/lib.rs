@@ -2,6 +2,7 @@ pub mod level;
 pub mod msg;
 pub mod diag;
 pub mod diag_ctx;
+pub use xc_span::fatal;
 
 use diag::Diagnostic;
 use diag_ctx::DiagnosticContext;

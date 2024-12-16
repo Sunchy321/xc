@@ -1,9 +1,9 @@
 pub mod define;
-pub mod fatal_error;
 pub mod interner;
 pub mod source_file;
 pub mod source_map;
 pub mod symbol;
+pub mod fatal;
 
 pub use crate::symbol::Symbol;
 

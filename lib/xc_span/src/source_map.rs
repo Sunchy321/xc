@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::fatal_error::FatalError;
+use crate::fatal::FatalError;
 use crate::source_file::{HashAlgorithm, OffsetOverflowError, SourceFile};
 use crate::{BytePos, Span};
 
