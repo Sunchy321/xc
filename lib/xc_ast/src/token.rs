@@ -1,4 +1,5 @@
-use crate::{literal::Literal, ty::TypeKind};
+use crate::literal::Literal;
+use crate::ty::TypeKind;
 use xc_span::{symbol::kw, Identifier, Span, Symbol};
 
 #[derive(Clone, Debug)]

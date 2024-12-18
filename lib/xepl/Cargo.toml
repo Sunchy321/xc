@@ -1,0 +1,9 @@
+[package]
+name = "xepl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xc_ast = { version = "0.1.0", path = "../xc_ast" }
+xc_parse = { version = "0.1.0", path = "../xc_parse" }
+xc_span = { version = "0.1.0", path = "../xc_span" }

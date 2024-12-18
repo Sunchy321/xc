@@ -1,13 +1,12 @@
 use std::cmp::Ordering;
-use std::sync::Arc;
 use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
 use xc_ast::expr::{
-    self, Arguments, CastType, DictItem, Expr, ExprFlags, ExprItem, ExprKind, ForLoopKind, StructItem
+    Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, StructItem
 };
-use xc_ast::literal::{Literal, LiteralKind};
+use xc_ast::literal::{self, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
 use xc_ast::stmt::Block;
@@ -893,10 +892,26 @@ impl<'a> Parser<'a> {
 
         let lo = self.token.span;
 
-        println!("parse_expr_primary: {:?}", self.token.kind);
-
         if self.eat_keyword(kw::Underscore) {
             let expr = self.make_expr(ExprKind::Placeholder, lo);
+
+            Ok(expr)
+        } else if self.eat_keyword(kw::Nil) {
+            let lit = literal::Literal::new(LiteralKind::Nil, kw::Nil, None);
+
+            let expr = self.make_expr(ExprKind::Literal(lit), lo);
+
+            Ok(expr)
+        } else if self.eat_keyword(kw::True) {
+            let lit = literal::Literal::new(LiteralKind::Bool, kw::True, None);
+
+            let expr = self.make_expr(ExprKind::Literal(lit), lo);
+
+            Ok(expr)
+        } else if self.eat_keyword(kw::False) {
+            let lit = literal::Literal::new(LiteralKind::Bool, kw::False, None);
+
+            let expr = self.make_expr(ExprKind::Literal(lit), lo);
 
             Ok(expr)
         } else if let Literal(lit) = self.token.kind {

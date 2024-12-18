@@ -6,6 +6,7 @@ use crate::token::{IdentIsRaw, Token};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiteralKind {
+    Nil,
     Bool,
     Integer,
     Floating,

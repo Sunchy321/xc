@@ -6,6 +6,7 @@ use crate::{BytePos, Span};
 
 pub enum Filename {
     Normal(String),
+    Repl
 }
 
 pub struct SourceMap {

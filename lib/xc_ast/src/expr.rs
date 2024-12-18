@@ -152,7 +152,7 @@ impl ExprKind {
             For(_, expr, block, else_, ..) => {
                 expr.flags.difference(ExprFlags::CONTAIN_NIL_COALESCE)
                     | block.expr_flags()
-                    | else_.clone().map_or(ExprFlags::empty(), |e| e.flags)
+                    | else_.clone().map_or(ExprFlags::empty(), |e| e.expr_flags())
             }
 
             While(cond, block, else_, _) => {
