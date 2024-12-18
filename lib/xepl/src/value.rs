@@ -1,4 +1,5 @@
-use std::fmt::Display;
+use std::fmt::{format, Display};
+use std::str;
 
 use termcolor::{ColorSpec, WriteColor};
 use xc_ast::literal::{Literal, LiteralKind};
@@ -9,13 +10,14 @@ pub enum Value {
     Nil,
     Bool(bool),
     Int(i128),
+    String(String),
 }
 
 impl Value {
-    pub fn from_lit(lit: Literal) -> Self {
+    pub fn from_lit(lit: &Literal) -> Result<Self, String> {
         use LiteralKind::*;
 
-        match lit.kind {
+        let value = match &lit.kind {
             Nil => Value::Nil,
 
             Bool => if lit.value == kw::True {
@@ -24,27 +26,54 @@ impl Value {
                 Value::Bool(false)
             },
 
+            Integer => {
+                let string = lit.value.as_str();
 
+                let (string, radix) = if string.starts_with("0x") {
+                    (&string[2..], 16)
+                } else if string.starts_with("0b") {
+                    (&string[2..], 2)
+                } else {
+                    (&string[..], 10)
+                };
+
+                let value = match i128::from_str_radix(string, radix) {
+                    Ok(value) => value,
+                    Err(_) => return Err(format!("invalid integer: {}", string).to_string()),
+                };
+
+                Value::Int(value)
+            }
+
+            String => Value::String(lit.value.to_string()),
 
             _ => todo!()
-        }
+        };
+
+        Ok(value)
     }
 
     pub fn print_value(&self, writer: &mut impl WriteColor) -> Result<(), Box<dyn std::error::Error>> {
+        use Value::*;
+
         match self {
-            Value::Nil => write!(writer, "nil")?,
-            Value::Bool(b) => write!(writer, "{}", b)?,
-            Value::Int(i) => write!(writer, "{}", i)?,
+            Nil => write!(writer, "nil")?,
+            Bool(b) => write!(writer, "{}", b)?,
+            Int(i) => write!(writer, "{}", i)?,
+            String(s ) => write!(writer, "\"{}\"", s)?,
         }
 
         Ok(())
     }
 
     pub fn print_type(&self, writer: &mut impl WriteColor) -> Result<(), Box<dyn std::error::Error>> {
+        use Value::*;
+
         match self {
-            Value::Nil => write!(writer, "<unknown>?")?,
-            Value::Bool(_) => write!(writer, "bool")?,
-            Value::Int(_) => write!(writer, "int")?,
+            Nil => write!(writer, "<unknown>?")?,
+            Bool(_) => write!(writer, "bool")?,
+            Int(_) => write!(writer, "int")?,
+            String(_) => write!(writer, "string")?,
         }
 
         Ok(())

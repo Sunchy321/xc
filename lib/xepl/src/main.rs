@@ -14,17 +14,16 @@ use xc_parse::session::ParseSession;
 use xc_span::source_map::Filename;
 use xc_span::create_session_globals_then;
 
-fn with_fg(color: Color) -> ColorSpec {
+fn create_spec(color: Color) -> ColorSpec {
     let mut spec = ColorSpec::new();
-
     spec.set_fg(Some(color));
-
+    spec.set_bold(true);
     spec
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let hint = with_fg(Color::Ansi256(8));
-    let error = with_fg(Color::Red);
+    let hint = create_spec(Color::Ansi256(8));
+    let error = create_spec(Color::Red);
 
     let session = ParseSession::new();
 
@@ -50,18 +49,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut parser = parser_from_source_str(&session, name, source);
 
-        let Ok(expr) = parser.parse_expr() else {
-            stdout.set_color(&error)?;
-            writeln!(stdout, "Error while parsing!")?;
-            stdout.reset()?;
-            continue;
+        let expr = match parser.parse_expr() {
+            Ok(expr) => expr,
+            Err(_) => {
+                stdout.set_color(&error)?;
+                writeln!(stdout, "Error while parsing!")?;
+                stdout.reset()?;
+                continue;
+            }
         };
 
-        let Ok(result) = eval(&*expr) else {
-            stdout.set_color(&error)?;
-            writeln!(stdout, "Error while evaluating!")?;
-            stdout.reset()?;
-            continue;
+        let result = match eval(&*expr) {
+            Ok(result) => result,
+            Err(err) => {
+                stdout.set_color(&error)?;
+                writeln!(stdout, "Error while evaluating: {}", err)?;
+                stdout.reset()?;
+                continue;
+            }
         };
 
         println_value(result, &mut stdout, &hint)?;
