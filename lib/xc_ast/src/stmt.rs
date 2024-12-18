@@ -1,8 +1,7 @@
 use thin_vec::ThinVec;
 use xc_span::Span;
 
-use crate::expr::Expr;
-use crate::literal::Literal;
+use crate::expr::{Expr, ExprFlags};
 use crate::pattern::Pattern;
 use crate::ptr::P;
 
@@ -11,6 +10,16 @@ pub enum StmtKind {
     Expr(P<Expr>),
     ExprSemi(P<Expr>),
     Empty
+}
+
+impl StmtKind {
+    pub fn expr_flags(&self) -> ExprFlags {
+        match self {
+            StmtKind::Expr(expr) => expr.flags,
+            StmtKind::ExprSemi(expr) => expr.flags,
+            StmtKind::Empty => ExprFlags::empty(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +51,14 @@ pub enum Cond {
 pub struct Block {
     pub stmts: ThinVec<Stmt>,
     pub span: Span,
+}
+
+impl Block {
+    pub fn expr_flags(&self) -> ExprFlags {
+        self.stmts.iter().fold(ExprFlags::empty(), |flags, stmt| {
+            flags | stmt.kind.expr_flags().difference(ExprFlags::CONTAIN_BOUND_EXPR | ExprFlags::CONTAIN_NIL_COALESCE)
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

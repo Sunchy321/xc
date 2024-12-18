@@ -5,7 +5,7 @@ use std::vec;
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
 use xc_ast::expr::{
-    self, Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, StructItem,
+    self, Arguments, CastType, DictItem, Expr, ExprFlags, ExprItem, ExprKind, ForLoopKind, StructItem
 };
 use xc_ast::literal::{Literal, LiteralKind};
 use xc_ast::path::PathStyle;
@@ -59,7 +59,9 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn make_expr(&self, kind: ExprKind, span: Span) -> P<Expr> {
-        P(Expr { kind, span })
+        let flags = kind.expr_flags();
+
+        P(Expr { kind, span, flags })
     }
 
     pub(crate) fn make_expr_err(&self, span: Span, guar: ErrorGuaranteed) -> P<Expr> {

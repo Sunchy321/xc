@@ -1,5 +1,5 @@
 [workspace]
-members = [ "lib/xc_ast", "lib/xc_error", "lib/xc_lexer", "lib/xc_macro", "lib/xc_parse", "lib/xc_span", "lib/xc_driver"]
+members = [ "lib/xc_ast", "lib/xc_error", "lib/xc_lexer", "lib/xc_macro", "lib/xc_parse", "lib/xc_span", "lib/xc_driver", "lib/xc_repl"]
 
 [package]
 name = "xc"
