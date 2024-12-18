@@ -794,7 +794,7 @@ impl<'a> Parser<'a> {
             match self.token.kind {
                 OpenDelim(Delimiter::Invisible) => return Ok(None),
 
-                Op(op) => {
+                Op(op) if op != op::Caret => {
                     if !self.op_ctx().is_op(op) {
                         return Err(self.diag_ctx().create_error("unknown operator"));
                     }
@@ -891,6 +891,8 @@ impl<'a> Parser<'a> {
 
         let lo = self.token.span;
 
+        println!("parse_expr_primary: {:?}", self.token.kind);
+
         if self.eat_keyword(kw::Underscore) {
             let expr = self.make_expr(ExprKind::Placeholder, lo);
 
@@ -911,6 +913,14 @@ impl<'a> Parser<'a> {
             self.next();
 
             let expr = self.make_expr(ExprKind::LambdaArgOrdinal(index), lo);
+
+            Ok(expr)
+        } else if self.eat_operator(op::Caret) {
+            let expr = self.make_expr(ExprKind::Caret, lo);
+
+            Ok(expr)
+        } else if self.eat(&TokenKind::Dollar) {
+            let expr = self.make_expr(ExprKind::Dollar, lo);
 
             Ok(expr)
         } else if self.check_path() {
@@ -984,17 +994,6 @@ impl<'a> Parser<'a> {
         let expr = self.make_expr(kind, lo.to(self.prev_token.span));
 
         self.maybe_recover_from_bad_qpath(expr)
-    }
-
-    fn parse_struct_literal(&mut self) -> ParseResult<'a, P<Expr>> {
-        let lo = self.token.span;
-
-        let (items, _) =
-            self.parse_delim_comma_seq(Delimiter::Brace, |this| this.parse_struct_item())?;
-        let span = lo.to(self.prev_token.span);
-        let expr = self.make_expr(ExprKind::Struct(items), span);
-
-        Ok(expr)
     }
 
     fn parse_expr_array_dict(&mut self) -> ParseResult<'a, P<Expr>> {
@@ -1089,7 +1088,7 @@ impl<'a> Parser<'a> {
                         ArrayDictItem::Expansion(expr) => DictItem::Expansion(expr),
                         ArrayDictItem::ExpansionPlaceHolder => {
                             todo!("ExpansionPlaceHolder in dict")
-                        },
+                        }
                     })
                     .collect();
 

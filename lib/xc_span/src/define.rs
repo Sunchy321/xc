@@ -84,10 +84,6 @@ define_symbols! {
         Super: "super",
         Then: "then",
         WillSet: "willSet",
-
-        RightArrow: "->",
-        FatArrow: "=>",
-        DotDotDot: "...",
     }
 
     Operators {
@@ -139,5 +135,10 @@ define_symbols! {
         AsExclamation: "as!",
         NotIs: "!is",
         NotIn: "!in",
+
+        Caret: "^",
+        RightArrow: "->",
+        FatArrow: "=>",
+        DotDotDot: "...",
     }
 }

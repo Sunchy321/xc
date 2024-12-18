@@ -31,6 +31,8 @@ pub enum ExprKind {
     Nil,
     /// `this`
     This,
+    /// `^`
+    Caret,
     /// `$`
     Dollar,
     /// `$0`
