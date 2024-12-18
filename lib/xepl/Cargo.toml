@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+termcolor = "1.4.1"
 xc_ast = { version = "0.1.0", path = "../xc_ast" }
 xc_parse = { version = "0.1.0", path = "../xc_parse" }
 xc_span = { version = "0.1.0", path = "../xc_span" }
