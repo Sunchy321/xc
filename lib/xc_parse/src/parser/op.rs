@@ -14,7 +14,7 @@ pub struct OpContext {
 impl OpContext {
     /// create operator context with builtin operators
     pub fn new() -> OpContext {
-        let prefixes = vec![op::Plus, op::Minus, op::BitNegate, kw::Some];
+        let prefixes = vec![op::Plus, op::Minus, kw::Compl, kw::Some];
         let suffixes = vec![op::Question, op::Exclamation];
 
         let mut map = HashMap::new();
@@ -39,9 +39,9 @@ impl OpContext {
 
         let bitwise = OpInfo::new(iter.next().unwrap(), Associativity::Isolate);
 
-        map.insert(op::BitAnd, bitwise);
-        map.insert(op::BitXor, bitwise);
-        map.insert(op::BitOr, bitwise);
+        map.insert(kw::And, bitwise);
+        map.insert(kw::Xor, bitwise);
+        map.insert(kw::Or, bitwise);
 
         let range = OpInfo::new(iter.next().unwrap(), Associativity::None);
 
@@ -73,8 +73,8 @@ impl OpContext {
 
         let logical = OpInfo::new(iter.next().unwrap(), Associativity::Isolate);
 
-        map.insert(op::And, logical);
-        map.insert(op::Or, logical);
+        map.insert(op::AndAnd, logical);
+        map.insert(op::OrOr, logical);
 
         let assignment = OpInfo::new(iter.next().unwrap(), Associativity::None);
 
@@ -86,9 +86,9 @@ impl OpContext {
         map.insert(op::ModuloAssign, assignment);
         map.insert(kw::ShlEq, assignment);
         map.insert(kw::ShrEq, assignment);
-        map.insert(op::BitAndAssign, assignment);
-        map.insert(op::BitXorAssign, assignment);
-        map.insert(op::BitOrAssign, assignment);
+        map.insert(kw::AndEq, assignment);
+        map.insert(kw::XorEq, assignment);
+        map.insert(kw::OrEq, assignment);
         map.insert(op::NullCoalescingAssign, assignment);
         map.insert(op::ConcatLeft, assignment);
         map.insert(op::ConcatRight, assignment);

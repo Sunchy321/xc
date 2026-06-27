@@ -1,5 +1,3 @@
-#![feature(let_chains, iterator_try_reduce)]
-
 use std::{path::Path, rc::Rc};
 
 use lexer::parse_token_tree;

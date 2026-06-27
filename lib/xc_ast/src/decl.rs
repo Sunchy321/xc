@@ -26,7 +26,6 @@ pub enum QualKind {
     Vis(Visibility),
 
     Async,
-    Auto,
     Const,
     Extern,
     Partial,

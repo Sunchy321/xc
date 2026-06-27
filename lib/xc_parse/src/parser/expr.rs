@@ -181,7 +181,7 @@ impl<'a> Parser<'a> {
             match a.kind {
                 FuncCallTrailing(block) => {
                     if let Some(l) = v.last_mut()
-                        && let FuncCall(_, ref mut blocks) = &mut l.kind
+                        && let FuncCall(_, blocks) = &mut l.kind
                     {
                         blocks.push(block);
                         l.span = l.span.to(a.span);
@@ -471,7 +471,7 @@ impl<'a> Parser<'a> {
             .fold(vec![], |mut v, g| {
                 match &g {
                     ExprAtomGroup::Expr(..) => match v.last_mut() {
-                        Some(ExprAtomGroupInner::Operand(ref mut operands)) => {
+                        Some(ExprAtomGroupInner::Operand(operands)) => {
                             operands.push(g);
                         }
 
@@ -486,7 +486,7 @@ impl<'a> Parser<'a> {
                             v.push(ExprAtomGroupInner::Operand(vec![]));
                         } else {
                             match v.last_mut() {
-                                Some(ExprAtomGroupInner::Operand(ref mut operands)) => {
+                                Some(ExprAtomGroupInner::Operand(operands)) => {
                                     operands.push(g);
                                 }
 

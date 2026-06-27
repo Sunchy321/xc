@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
         let lo = self.token.span;
 
         let (this_kind, this_key, hi) = match self.token.kind {
-            TokenKind::Op(op) if op == op::And => {
+            TokenKind::Op(op) if op == op::Amp => {
                 let this_kind = if is_isolated_this(self, 1) {
                     // `&this`
                     self.next();

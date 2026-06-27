@@ -68,7 +68,6 @@ impl<'a> Parser<'a> {
             QualKind::Vis(vis)
         } else {
             let mut check_kind = || {
-                check_qual!(Auto);
                 check_qual!(Async);
                 check_qual!(Const);
                 check_qual!(Extern);
