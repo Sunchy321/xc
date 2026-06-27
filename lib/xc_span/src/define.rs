@@ -41,7 +41,6 @@ define_symbols! {
         Int: "int",
         Internal: "internal",
         Is: "is",
-        Lazy: "lazy",
         Let: "let",
         Macro: "macro",
         Match: "match",
@@ -81,7 +80,9 @@ define_symbols! {
 
         DidSet: "didSet",
         Get: "get",
+        Lazy: "lazy",
         Infix: "infix",
+        Once: "once",
         Prefix: "prefix",
         Root: "root",
         Set: "set",
