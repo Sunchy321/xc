@@ -7,88 +7,127 @@ use xc_span::symbol::op;
 use crate::store::Store;
 use crate::value::Value;
 
-pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
-    use ExprKind::*;
+#[derive(Debug)]
+enum ControlFlow {
+    Err(String),
+    Break(Option<Value>),
+    Continue,
+}
 
-    match &expr.kind {
-        Placeholder => Err("placeholder".to_string()),
-        Literal(lit) => Value::from_lit(lit),
-        Paren(expr) => eval(expr, store),
-        Block(block) => eval_block(block, store),
+pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
+    match eval_inner(expr, store) {
+        Ok(v) => Ok(v),
+        Err(ControlFlow::Err(e)) => Err(e),
+        Err(ControlFlow::Break(_)) => Err("break outside loop".to_string()),
+        Err(ControlFlow::Continue) => Err("continue outside loop".to_string()),
+    }
+}
+
+fn err(msg: &str) -> ControlFlow {
+    ControlFlow::Err(msg.to_string())
+}
+
+fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
+    use ExprKind::*;
+    Ok(match &expr.kind {
+        Placeholder => return Err(err("placeholder")),
+        Literal(lit) => Value::from_lit(lit).map_err(|e| err(&e))?,
+        Paren(expr) => eval_inner(expr, store)?,
+        Block(block) => eval_block(block, store)?,
         Infix(sym, exprs) => {
             let mut iter = exprs.iter();
-            let mut acc = eval(iter.next().unwrap(), store)?;
+            let mut acc = eval_inner(iter.next().unwrap(), store)?;
             for expr in iter {
-                let rhs = eval(expr, store)?;
+                let rhs = eval_inner(expr, store)?;
                 acc = eval_infix(*sym, acc, rhs)?;
             }
-            Ok(acc)
+            acc
         }
         Comparison(syms, exprs) => {
             let mut iter_sym = syms.iter();
             let mut iter_expr = exprs.iter();
-            let mut acc = eval(iter_expr.next().unwrap(), store)?;
+            let mut acc = eval_inner(iter_expr.next().unwrap(), store)?;
             for expr in iter_expr {
                 let sym = iter_sym.next().unwrap();
-                let rhs = eval(expr, store)?;
+                let rhs = eval_inner(expr, store)?;
                 let result = eval_infix(*sym, acc, rhs.clone())?;
                 if let Value::Bool(false) = &result {
                     return Ok(result);
                 }
                 acc = rhs;
             }
-            Ok(Value::Bool(true))
+            Value::Bool(true)
         }
         Prefix(sym, expr) => {
-            let val = eval(expr, store)?;
-            eval_prefix(*sym, val)
+            let val = eval_inner(expr, store)?;
+            eval_prefix(*sym, val)?
         }
         If(cond, then_branch, else_branch) => {
-            let cond_val = eval(cond, store)?;
+            let cond_val = eval_inner(cond, store)?;
             match cond_val {
-                Value::Bool(true) => eval(then_branch, store),
+                Value::Bool(true) => eval_inner(then_branch, store)?,
                 Value::Bool(false) => {
                     if let Some(else_expr) = else_branch {
-                        eval(else_expr, store)
+                        eval_inner(else_expr, store)?
                     } else {
-                        Ok(Value::Nil)
+                        Value::Void
                     }
                 }
-                _ => Err(format!("if condition must be Bool, got {:?}", cond_val)),
+                _ => return Err(err("if condition must be Bool")),
             }
         }
+        While(cond, body, else_block, _) => {
+            let mut result = Value::Void;
+            loop {
+                let cond_val = eval_inner(cond, store)?;
+                match cond_val {
+                    Value::Bool(true) => {
+                        match eval_inner(body, store) {
+                            Ok(_) => {}
+                            Err(ControlFlow::Break(v)) => {
+                                result = v.unwrap_or(Value::Void);
+                                break;
+                            }
+                            Err(ControlFlow::Continue) => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Value::Bool(false) => {
+                        if let Some(else_expr) = else_block {
+                            result = eval_inner(else_expr, store)?;
+                        }
+                        break;
+                    }
+                    _ => return Err(err("while condition must be Bool")),
+                }
+            }
+            result
+        }
+        Break(val, _label) => {
+            let v = val.as_ref().map(|e| eval_inner(e, store)).transpose()?;
+            return Err(ControlFlow::Break(v));
+        }
+        Continue(_label) => return Err(ControlFlow::Continue),
         Path(path) => {
             if path.segments.len() == 1 {
                 let name = path.segments[0].ident.name;
-                store
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("undefined variable: {}", name.as_str()))
+                store.get(name).cloned().ok_or_else(|| err("undefined variable"))?
             } else {
-                Err("qualified paths not yet supported".to_string())
+                return Err(err("qualified paths not supported"));
             }
         }
         FuncCall(func_expr, args, _) => {
             let name = match &func_expr.kind {
-                ExprKind::Path(path) if path.segments.len() == 1 => {
-                    path.segments[0].ident.name
-                }
-                _ => return Err("function name must be a simple identifier".to_string()),
+                ExprKind::Path(path) if path.segments.len() == 1 => path.segments[0].ident.name,
+                _ => return Err(err("function name must be a simple identifier")),
             };
-            let func = store
-                .get_func(name)
-                .cloned()
-                .ok_or_else(|| format!("undefined function: {}", name.as_str()))?;
+            let func = store.get_func(name).cloned()
+                .ok_or_else(|| err("undefined function"))?;
             let params = &func.sig.params;
             if params.len() != args.0.len() {
-                return Err(format!(
-                    "expected {} arguments, got {}",
-                    params.len(),
-                    args.0.len()
-                ));
+                return Err(err("wrong number of arguments"));
             }
-            let saved: Vec<_> = params
-                .iter()
+            let saved: Vec<_> = params.iter()
                 .map(|p| (p.ident.name, store.get(p.ident.name).cloned()))
                 .collect();
             for (param, arg) in params.iter().zip(args.0.iter()) {
@@ -97,13 +136,13 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
                     | xc_ast::expr::Argument::Named(_, e)
                     | xc_ast::expr::Argument::Expansion(e) => e,
                 };
-                let val = eval(arg_expr, store)?;
+                let val = eval_inner(arg_expr, store)?;
                 store.set(param.ident.name, val);
             }
             let result = match &func.body {
                 FuncBody::Block(block) => eval_block(block, store),
-                FuncBody::Arrow(expr) => eval(expr, store),
-                FuncBody::Semicolon => Ok(Value::Nil),
+                FuncBody::Arrow(expr) => eval_inner(expr, store),
+                FuncBody::Semicolon => Ok(Value::Void),
             };
             for (name, saved_val) in saved {
                 match saved_val {
@@ -111,88 +150,66 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
                     None => { store.remove(name); }
                 }
             }
-            result
+            result?
         }
-        _ => Err(format!("eval: unimplemented {:?}", expr.kind)),
-    }
+        _ => return Err(err(&format!("eval: unimplemented {:?}", expr.kind))),
+    })
 }
 
-fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, String> {
+fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, ControlFlow> {
     use Value::*;
-
-    match (op, &lhs, &rhs) {
-        (op::Plus, Int(a), Int(b)) => Ok(Int(a + b)),
-        (op::Minus, Int(a), Int(b)) => Ok(Int(a - b)),
-        (op::Multiply, Int(a), Int(b)) => Ok(Int(a * b)),
+    Ok(match (op, &lhs, &rhs) {
+        (op::Plus, Int(a), Int(b)) => Int(a + b),
+        (op::Minus, Int(a), Int(b)) => Int(a - b),
+        (op::Multiply, Int(a), Int(b)) => Int(a * b),
         (op::Divide, Int(a), Int(b)) => {
-            if *b == 0 {
-                return Err("division by zero".to_string());
-            }
-            Ok(Int(a / b))
+            if *b == 0 { return Err(err("division by zero")); }
+            Int(a / b)
         }
-        (op::Concat, String(a), String(b)) => Ok(String(format!("{}{}", a, b))),
-
-        (op::Equal, Int(a), Int(b)) => Ok(Bool(a == b)),
-        (op::NotEqual, Int(a), Int(b)) => Ok(Bool(a != b)),
-        (op::Less, Int(a), Int(b)) => Ok(Bool(a < b)),
-        (op::Greater, Int(a), Int(b)) => Ok(Bool(a > b)),
-        (op::LessEqual, Int(a), Int(b)) => Ok(Bool(a <= b)),
-        (op::GreaterEqual, Int(a), Int(b)) => Ok(Bool(a >= b)),
-
-        (op::Equal, Bool(a), Bool(b)) => Ok(Bool(a == b)),
-        (op::NotEqual, Bool(a), Bool(b)) => Ok(Bool(a != b)),
-
-        (op::Equal, String(a), String(b)) => Ok(Bool(a == b)),
-        (op::NotEqual, String(a), String(b)) => Ok(Bool(a != b)),
-
-        (op::Equal, Nil, Nil) => Ok(Bool(true)),
-        (op::NotEqual, Nil, Nil) => Ok(Bool(false)),
-
-        (op::AndAnd, Bool(a), Bool(b)) => Ok(Bool(*a && *b)),
-        (op::OrOr, Bool(a), Bool(b)) => Ok(Bool(*a || *b)),
-
+        (op::Concat, String(a), String(b)) => String(format!("{}{}", a, b)),
+        (op::Equal, Int(a), Int(b)) => Bool(a == b),
+        (op::NotEqual, Int(a), Int(b)) => Bool(a != b),
+        (op::Less, Int(a), Int(b)) => Bool(a < b),
+        (op::Greater, Int(a), Int(b)) => Bool(a > b),
+        (op::LessEqual, Int(a), Int(b)) => Bool(a <= b),
+        (op::GreaterEqual, Int(a), Int(b)) => Bool(a >= b),
+        (op::Equal, Bool(a), Bool(b)) => Bool(a == b),
+        (op::NotEqual, Bool(a), Bool(b)) => Bool(a != b),
+        (op::Equal, String(a), String(b)) => Bool(a == b),
+        (op::NotEqual, String(a), String(b)) => Bool(a != b),
+        (op::Equal, Nil, Nil) => Bool(true),
+        (op::NotEqual, Nil, Nil) => Bool(false),
+        (op::AndAnd, Bool(a), Bool(b)) => Bool(*a && *b),
+        (op::OrOr, Bool(a), Bool(b)) => Bool(*a || *b),
         (op::Modulo, Int(a), Int(b)) => {
-            if *b == 0 {
-                return Err("modulo by zero".to_string());
-            }
-            Ok(Int(a % b))
+            if *b == 0 { return Err(err("modulo by zero")); }
+            Int(a % b)
         }
-
-        _ => Err(format!(
-            "infix {:?} not supported for {:?} and {:?}",
-            op.as_str(),
-            lhs,
-            rhs
-        )),
-    }
+        _ => return Err(err(&format!("infix not supported: {:?}", op.as_str()))),
+    })
 }
 
-fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, String> {
+fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, ControlFlow> {
     use Value::*;
-
-    match (op, &val) {
-        (op::Minus, Int(a)) => Ok(Int(-a)),
-        (op::Plus, Int(_)) => Ok(val),
-        _ => Err(format!(
-            "prefix {:?} not supported for {:?}",
-            op.as_str(),
-            val
-        )),
-    }
+    Ok(match (op, &val) {
+        (op::Minus, Int(a)) => Int(-a),
+        (op::Plus, Int(_)) => val,
+        _ => return Err(err(&format!("prefix not supported: {:?}", op.as_str()))),
+    })
 }
 
-fn eval_block(block: &Block, store: &mut Store) -> Result<Value, String> {
-    let mut last = Value::Nil;
+fn eval_block(block: &Block, store: &mut Store) -> Result<Value, ControlFlow> {
+    let mut last = Value::Void;
     for stmt in block.stmts.iter() {
         match &stmt.kind {
             StmtKind::Empty => {}
             StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => {
-                last = eval(expr, store)?;
+                last = eval_inner(expr, store)?;
             }
             StmtKind::Let(pat, init) => {
                 let value = match init {
-                    Some(expr) => eval(expr, store)?,
-                    None => Value::Nil,
+                    Some(expr) => eval_inner(expr, store)?,
+                    None => Value::Void,
                 };
                 if let PatternKind::Bind(ident, _) = &pat.kind {
                     store.set(ident.name, value.clone());
