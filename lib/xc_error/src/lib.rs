@@ -50,7 +50,13 @@ pub trait IntoDiagnostic<'a> {
 }
 
 impl IntoDiagnostic<'_> for &str {
-    fn into_diag(self, ctx: &DiagnosticContext, level: Level) -> Diagnostic<'_> {
-        unimplemented!()
+    fn into_diag(self, ctx: &DiagnosticContext, _level: Level) -> Diagnostic<'_> {
+        ctx.struct_span_error(Span::DUMMY, self.to_string())
+    }
+}
+
+impl IntoDiagnostic<'_> for String {
+    fn into_diag(self, ctx: &DiagnosticContext, _level: Level) -> Diagnostic<'_> {
+        ctx.struct_span_error(Span::DUMMY, self)
     }
 }

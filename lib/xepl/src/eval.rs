@@ -63,6 +63,20 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
             let val = eval(expr, store)?;
             eval_prefix(*sym, val)
         }
+        If(cond, then_branch, else_branch) => {
+            let cond_val = eval(cond, store)?;
+            match cond_val {
+                Value::Bool(true) => eval(then_branch, store),
+                Value::Bool(false) => {
+                    if let Some(else_expr) = else_branch {
+                        eval(else_expr, store)
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                }
+                _ => Err(format!("if condition must be Bool, got {:?}", cond_val)),
+            }
+        }
         Path(path) => {
             // Simple single-segment identifier lookup
             if path.segments.len() == 1 {

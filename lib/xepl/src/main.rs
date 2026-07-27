@@ -14,10 +14,13 @@ use rustyline::{Completer, Editor, Helper, Hinter, Validator};
 use store::Store;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use value::println_value;
+use xc_lexer::cursor::Cursor;
+use xc_lexer::{LiteralKind, TokenKind};
 use xc_parse::parser_from_source_str;
 use xc_parse::session::ParseSession;
 use xc_span::create_session_globals_then;
 use xc_span::source_map::Filename;
+use xc_span::Symbol;
 
 fn create_spec(color: Color) -> ColorSpec {
     let mut spec = ColorSpec::new();
@@ -34,84 +37,104 @@ impl Highlighter for ReplHelper {
         highlight_x(line)
     }
 
-    fn highlight_char(&self, line: &str, _pos: usize, _kind: rustyline::highlight::CmdKind) -> bool {
+    fn highlight_char(&self, _line: &str, _pos: usize, _kind: rustyline::highlight::CmdKind) -> bool {
         true
     }
 }
 
 fn highlight_x(input: &str) -> Cow<'_, str> {
-    let mut result = String::with_capacity(input.len() + 64);
+    // Phase 1: tokenize
+    struct Tok<'a> { text: &'a str, kind: TokenKind, pos: usize }
+    let mut tokens: Vec<Tok> = Vec::new();
+    let mut cursor = Cursor::new(input);
+    let mut pos = 0usize;
+    loop {
+        let token = cursor.next_token();
+        if matches!(token.kind, TokenKind::Eof) { break; }
+        let len = token.len as usize;
+        tokens.push(Tok { text: &input[pos..pos + len], kind: token.kind, pos });
+        pos += len;
+    }
 
-    let keywords: &[&str] = &[
+    // Phase 2: mark which identifiers should be highlighted as keywords
+    let mut highlight = vec![false; tokens.len()];
+    let hard_kw: &[&str] = &[
         "func", "let", "if", "else", "return", "throw", "try", "catch", "break", "continue",
         "while", "for", "match", "async", "const", "unsafe", "extern", "this", "nil", "true",
         "false", "mut", "operator", "in", "is", "as", "do", "class", "trait", "impl", "type",
     ];
+    let ctx_kw: &[&str] = &["then", "get", "set", "didSet", "willSet", "lazy", "once",
+                            "root", "super", "infix", "prefix", "suffix"];
 
-    let mut chars = input.chars().peekable();
-    while let Some(&ch) = chars.peek() {
-        if ch == '/' && input.len() > 0 {
-            // Check for comments
-            let rest: String = chars.clone().take(2).collect();
-            if rest == "//" {
-                let comment: String = chars.by_ref().collect();
-                result.push_str("\x1b[90m"); // gray
-                result.push_str(&comment);
-                result.push_str("\x1b[0m");
-                break;
-            }
+    for i in 0..tokens.len() {
+        let t = &tokens[i];
+        if !matches!(t.kind, TokenKind::Identifier) { continue; }
+
+        let is_hard_kw = hard_kw.iter().any(|&kw| kw == t.text);
+        let is_ctx_kw = ctx_kw.iter().any(|&kw| kw == t.text);
+
+        if is_hard_kw {
+            highlight[i] = true;
+        } else if is_ctx_kw {
+            let prev_is = |text: &str| i > 0 && tokens[i - 1].text == text;
+            let next_is = |text: &str| i + 1 < tokens.len() && tokens[i + 1].text == text;
+
+            let should_highlight = match t.text {
+                "then" => prev_is("if"),
+                "get" | "set" | "didSet" | "willSet" => prev_is("{") || prev_is("}"),
+                "lazy" => prev_is("("),
+                "once" => prev_is("do") || prev_is("{") || prev_is(","),
+                "root" | "super" => next_is("::"),
+                "infix" | "prefix" | "suffix" => prev_is("operator"),
+                _ => false,
+            };
+
+            highlight[i] = should_highlight;
         }
+    }
 
-        if ch == '"' {
-            let mut s = String::new();
-            s.push(chars.next().unwrap()); // opening "
-            for ch in chars.by_ref() {
-                s.push(ch);
-                if ch == '"' {
-                    break;
-                }
-            }
-            result.push_str("\x1b[32m"); // green
-            result.push_str(&s);
-            result.push_str("\x1b[0m");
-            continue;
+    // Phase 3: render with colors
+    let kw_blue = "\x1b[1;34m";
+    let num_cyan = "\x1b[36m";
+    let str_green = "\x1b[32m";
+    let comment_gray = "\x1b[90m";
+    let reset = "\x1b[0m";
+
+    let mut result = String::with_capacity(input.len() + 64);
+    let mut prev_end = 0usize;
+    for (i, t) in tokens.iter().enumerate() {
+        // Copy any whitespace between tokens
+        if t.pos > prev_end {
+            result.push_str(&input[prev_end..t.pos]);
         }
+        prev_end = t.pos + t.text.len();
 
-        if ch.is_ascii_digit() {
-            let mut num = String::new();
-            while let Some(&ch) = chars.peek() {
-                if ch.is_ascii_digit() || ch == '.' || ch == 'x' || ch == 'b' || ch == '_' {
-                    num.push(chars.next().unwrap());
+        let colored = match &t.kind {
+            TokenKind::Identifier => {
+                if highlight[i] {
+                    format!("{}{}{}", kw_blue, t.text, reset)
                 } else {
-                    break;
+                    t.text.to_string()
                 }
             }
-            result.push_str("\x1b[36m"); // cyan
-            result.push_str(&num);
-            result.push_str("\x1b[0m");
-            continue;
-        }
-
-        if ch.is_alphabetic() || ch == '_' {
-            let mut word = String::new();
-            while let Some(&ch) = chars.peek() {
-                if ch.is_alphanumeric() || ch == '_' {
-                    word.push(chars.next().unwrap());
-                } else {
-                    break;
+            TokenKind::Literal { kind, .. } => match kind {
+                LiteralKind::Integer { .. } | LiteralKind::Floating { .. } => {
+                    format!("{}{}{}", num_cyan, t.text, reset)
                 }
+                LiteralKind::Char { .. } | LiteralKind::String { .. } | LiteralKind::RawString { .. } => {
+                    format!("{}{}{}", str_green, t.text, reset)
+                }
+                LiteralKind::SymbolLit => t.text.to_string(),
+            },
+            TokenKind::LineComment | TokenKind::BlockComment { .. } => {
+                format!("{}{}{}", comment_gray, t.text, reset)
             }
-            if keywords.contains(&word.as_str()) {
-                result.push_str("\x1b[1;34m"); // bold blue
-                result.push_str(&word);
-                result.push_str("\x1b[0m");
-            } else {
-                result.push_str(&word);
-            }
-            continue;
-        }
-
-        result.push(chars.next().unwrap());
+            _ => t.text.to_string(),
+        };
+        result.push_str(&colored);
+    }
+    if prev_end < input.len() {
+        result.push_str(&input[prev_end..]);
     }
 
     Cow::Owned(result)

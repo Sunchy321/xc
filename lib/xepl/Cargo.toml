@@ -7,5 +7,6 @@ edition = "2021"
 rustyline = { version = "18", default-features = false, features = ["derive"] }
 termcolor = "1.4.1"
 xc_ast = { version = "0.1.0", path = "../xc_ast" }
+xc_lexer = { version = "0.1.0", path = "../xc_lexer" }
 xc_parse = { version = "0.1.0", path = "../xc_parse" }
 xc_span = { version = "0.1.0", path = "../xc_span" }

@@ -1207,13 +1207,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_cond(&mut self, if_expr: bool) -> ParseResult<'a, P<Expr>> {
-        let mut res = Restrictions::empty();
+        let mut res = Restrictions::NO_TRAILING_BLOCK;
 
         if if_expr {
             res |= Restrictions::THEN_IS_KEYWORD;
         }
 
-        let mut cond = self.parse_expr_res(res)?;
+        let cond = self.parse_expr_res(res).map_err(|mut err| {
+            err.span_label(self.token.span, "expected condition expression");
+            err
+        })?;
 
         Ok(cond)
     }
@@ -1353,7 +1356,10 @@ impl<'a> Parser<'a> {
             } else if matches!(else_kind, ElseKind::IfThen) {
                 self.parse_expr()?
             } else {
-                unimplemented!()
+                return Err(self.diag_ctx().struct_span_error(
+                    else_span.to(self.token.span),
+                    "expected `{` or `if` after `else`".to_string(),
+                ))
             };
 
         Ok(expr)
