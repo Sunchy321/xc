@@ -1,5 +1,3 @@
-use std::fmt::{format, Display};
-use std::str;
 
 use termcolor::{ColorSpec, WriteColor};
 use xc_ast::literal::{Literal, LiteralKind};

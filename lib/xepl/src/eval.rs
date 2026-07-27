@@ -1,6 +1,7 @@
 use xc_ast::expr::{Expr, ExprKind};
+use xc_ast::func::FuncBody;
 use xc_ast::pattern::PatternKind;
-use xc_ast::stmt::StmtKind;
+use xc_ast::stmt::{Block, StmtKind};
 use xc_span::symbol::op;
 
 use crate::store::Store;
@@ -13,28 +14,7 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
         Placeholder => Err("placeholder".to_string()),
         Literal(lit) => Value::from_lit(lit),
         Paren(expr) => eval(expr, store),
-        Block(block) => {
-            let mut last = Value::Nil;
-            for stmt in block.stmts.iter() {
-                match &stmt.kind {
-                    StmtKind::Empty => {}
-                    StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => {
-                        last = eval(expr, store)?;
-                    }
-                    StmtKind::Let(pat, init) => {
-                        let value = match init {
-                            Some(expr) => eval(expr, store)?,
-                            None => Value::Nil,
-                        };
-                        if let PatternKind::Bind(ident, _) = &pat.kind {
-                            store.set(ident.name, value.clone());
-                        }
-                        last = Value::Nil;
-                    }
-                }
-            }
-            Ok(last)
-        }
+        Block(block) => eval_block(block, store),
         Infix(sym, exprs) => {
             let mut iter = exprs.iter();
             let mut acc = eval(iter.next().unwrap(), store)?;
@@ -78,7 +58,6 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
             }
         }
         Path(path) => {
-            // Simple single-segment identifier lookup
             if path.segments.len() == 1 {
                 let name = path.segments[0].ident.name;
                 store
@@ -88,6 +67,51 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
             } else {
                 Err("qualified paths not yet supported".to_string())
             }
+        }
+        FuncCall(func_expr, args, _) => {
+            let name = match &func_expr.kind {
+                ExprKind::Path(path) if path.segments.len() == 1 => {
+                    path.segments[0].ident.name
+                }
+                _ => return Err("function name must be a simple identifier".to_string()),
+            };
+            let func = store
+                .get_func(name)
+                .cloned()
+                .ok_or_else(|| format!("undefined function: {}", name.as_str()))?;
+            let params = &func.sig.params;
+            if params.len() != args.0.len() {
+                return Err(format!(
+                    "expected {} arguments, got {}",
+                    params.len(),
+                    args.0.len()
+                ));
+            }
+            let saved: Vec<_> = params
+                .iter()
+                .map(|p| (p.ident.name, store.get(p.ident.name).cloned()))
+                .collect();
+            for (param, arg) in params.iter().zip(args.0.iter()) {
+                let arg_expr = match arg {
+                    xc_ast::expr::Argument::Ordinal(e)
+                    | xc_ast::expr::Argument::Named(_, e)
+                    | xc_ast::expr::Argument::Expansion(e) => e,
+                };
+                let val = eval(arg_expr, store)?;
+                store.set(param.ident.name, val);
+            }
+            let result = match &func.body {
+                FuncBody::Block(block) => eval_block(block, store),
+                FuncBody::Arrow(expr) => eval(expr, store),
+                FuncBody::Semicolon => Ok(Value::Nil),
+            };
+            for (name, saved_val) in saved {
+                match saved_val {
+                    Some(v) => store.set(name, v),
+                    None => { store.remove(name); }
+                }
+            }
+            result
         }
         _ => Err(format!("eval: unimplemented {:?}", expr.kind)),
     }
@@ -155,4 +179,27 @@ fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, String> {
             val
         )),
     }
+}
+
+fn eval_block(block: &Block, store: &mut Store) -> Result<Value, String> {
+    let mut last = Value::Nil;
+    for stmt in block.stmts.iter() {
+        match &stmt.kind {
+            StmtKind::Empty => {}
+            StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => {
+                last = eval(expr, store)?;
+            }
+            StmtKind::Let(pat, init) => {
+                let value = match init {
+                    Some(expr) => eval(expr, store)?,
+                    None => Value::Nil,
+                };
+                if let PatternKind::Bind(ident, _) = &pat.kind {
+                    store.set(ident.name, value.clone());
+                }
+                last = Value::Nil;
+            }
+        }
+    }
+    Ok(last)
 }

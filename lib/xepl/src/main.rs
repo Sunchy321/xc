@@ -14,13 +14,13 @@ use rustyline::{Completer, Editor, Helper, Hinter, Validator};
 use store::Store;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use value::println_value;
+use xc_ast::decl::DeclKind;
 use xc_lexer::cursor::Cursor;
 use xc_lexer::{LiteralKind, TokenKind};
 use xc_parse::parser_from_source_str;
 use xc_parse::session::ParseSession;
 use xc_span::create_session_globals_then;
 use xc_span::source_map::Filename;
-use xc_span::Symbol;
 
 fn create_spec(color: Color) -> ColorSpec {
     let mut spec = ColorSpec::new();
@@ -168,6 +168,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let name = Filename::Repl;
+
+        // Handle function definitions
+        if trimmed.starts_with("func ") {
+            let mut parser = parser_from_source_str(&session, name, trimmed.to_string());
+            match parser.parse_decl() {
+                Ok(Some(decl)) => {
+                    if let DeclKind::Func(func) = &decl.kind {
+                        let fname = func.ident.name;
+                        store.add_func(func.clone());
+                        stdout.set_color(&hint)?;
+                        writeln!(stdout, "<function {}>", fname.as_str())?;
+                        stdout.reset()?;
+                    }
+                }
+                Err(_) => {
+                    stdout.set_color(&error)?;
+                    writeln!(stdout, "Error while parsing function!")?;
+                    stdout.reset()?;
+                }
+                _ => {}
+            }
+            continue;
+        }
 
         // Wrap input in { } to support both expressions and statements
         let source = format!("{{ {} }}", trimmed);
