@@ -10,6 +10,8 @@ pub enum Value {
     Int(i128),
     String(String),
     Array(Vec<Value>),
+    Ok(Box<Value>),
+    Error(Box<Value>),
 }
 
 impl Value {
@@ -74,9 +76,11 @@ impl Value {
                 }
                 write!(writer, "]")?
             }
+            Ok(v) => { write!(writer, "ok(")?; v.print_value(writer)?; write!(writer, ")")?; }
+            Error(e) => { write!(writer, "err(")?; e.print_value(writer)?; write!(writer, ")")?; }
         }
 
-        Ok(())
+        std::result::Result::Ok(())
     }
 
     pub fn print_type(
@@ -92,9 +96,11 @@ impl Value {
             Int(_) => write!(writer, "int")?,
             String(_) => write!(writer, "string")?,
             Array(items) => write!(writer, "[{}]", items.len())?,
+            Ok(v) => { v.print_type(writer)?; write!(writer, "!!")?; write!(writer, "?")?; }
+            Error(e) => { write!(writer, "!!")?; e.print_type(writer)?; }
         }
 
-        Ok(())
+        std::result::Result::Ok(())
     }
 }
 

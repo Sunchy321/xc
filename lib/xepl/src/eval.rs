@@ -1,6 +1,7 @@
 use xc_ast::expr::{Expr, ExprKind};
 use xc_ast::func::FuncBody;
 use xc_ast::pattern::PatternKind;
+use xc_ast::ptr::P;
 use xc_ast::stmt::{Block, StmtKind};
 use xc_span::symbol::op;
 
@@ -31,7 +32,7 @@ fn err(msg: &str) -> ControlFlow {
 
 fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
     use ExprKind::*;
-    Ok(match &expr.kind {
+    std::result::Result::Ok(match &expr.kind {
         Placeholder => return Err(err("placeholder")),
         Literal(lit) => Value::from_lit(lit).map_err(|e| err(&e))?,
         Array(items) => {
@@ -120,6 +121,17 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
             return Err(ControlFlow::Break(v));
         }
         Continue(_label) => return Err(ControlFlow::Continue),
+        Throw(val) => {
+            let v = val.as_ref().map(|e| eval_inner(e, store)).transpose()?;
+            return Err(ControlFlow::Return(Value::Error(Box::new(v.unwrap_or(Value::Void)))));
+        }
+        Try(expr, catchers, else_block) => {
+            match eval_inner(expr, store) {
+                Ok(v) => try_handle(v, catchers, else_block, store)?,
+                Err(ControlFlow::Return(v)) => try_handle(v, catchers, else_block, store)?,
+                Err(e) => return Err(e),
+            }
+        }
         For(pat, iter_expr, body, else_block, _kind, _label) => {
             let iter_val = eval_inner(iter_expr, store)?;
             match iter_val {
@@ -187,6 +199,13 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
                 Err(ControlFlow::Return(v)) => v,
                 Err(e) => return Err(e),
             };
+            // If function has throw qualifier, wrap success in Ok
+            let has_throw = !matches!(&func.sig.tail.throw, xc_ast::func::FuncThrow::None);
+            let result = if has_throw && !matches!(&result, Value::Error(_)) {
+                Value::Ok(Box::new(result))
+            } else {
+                result
+            };
             for (name, saved_val) in saved {
                 match saved_val {
                     Some(v) => store.set(name, v),
@@ -201,7 +220,8 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
 
 fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, ControlFlow> {
     use Value::*;
-    Ok(match (op, &lhs, &rhs) {
+    #[allow(unused_qualifications)]
+    std::result::Result::Ok(match (op, &lhs, &rhs) {
         (op::Plus, Int(a), Int(b)) => Int(a + b),
         (op::Minus, Int(a), Int(b)) => Int(a - b),
         (op::Multiply, Int(a), Int(b)) => Int(a * b),
@@ -234,7 +254,7 @@ fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, Cont
 
 fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, ControlFlow> {
     use Value::*;
-    Ok(match (op, &val) {
+    std::result::Result::Ok(match (op, &val) {
         (op::Minus, Int(a)) => Int(-a),
         (op::Plus, Int(_)) => val,
         _ => return Err(err(&format!("prefix not supported: {:?}", op.as_str()))),
@@ -244,7 +264,61 @@ fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, ControlFlow> {
 fn bind_pattern(pat: &xc_ast::pattern::Pattern, value: Value, store: &mut Store) {
     match &pat.kind {
         PatternKind::Bind(ident, _) => { store.set(ident.name, value); }
-        _ => {} // TODO: structured patterns
+        _ => {}
+    }
+}
+
+fn pattern_matches(pat: &xc_ast::pattern::Pattern, _value: &Value) -> bool {
+    match &pat.kind {
+        PatternKind::Wildcard => true,
+        PatternKind::Bind(_, _) => true,
+        PatternKind::Expr(e) => {
+            matches!(&e.kind, ExprKind::Path(_) | ExprKind::Literal(_))
+        }
+        _ => false,
+    }
+}
+
+fn eval_inner_stmt(stmt: &xc_ast::stmt::Stmt, store: &mut Store) -> Result<Value, ControlFlow> {
+    match &stmt.kind {
+        StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => eval_inner(expr, store),
+        StmtKind::Let(pat, init) => {
+            let value = match init {
+                Some(expr) => eval_inner(expr, store)?,
+                None => Value::Void,
+            };
+            if let PatternKind::Bind(ident, _) = &pat.kind {
+                store.set(ident.name, value.clone());
+            }
+            Ok(Value::Void)
+        }
+        StmtKind::Empty => Ok(Value::Void),
+    }
+}
+
+fn try_handle(v: Value, catchers: &[xc_ast::stmt::Catcher], else_block: &Option<P<Block>>, store: &mut Store) -> Result<Value, ControlFlow> {
+    match v {
+        Value::Ok(ok) => Ok(*ok),
+        Value::Error(e) => {
+            for c in catchers {
+                if pattern_matches(&c.pattern, &*e) {
+                    bind_pattern(&c.pattern, (*e).clone(), store);
+                    let mut last = Value::Void;
+                    for stmt in &c.stmts {
+                        last = eval_inner_stmt(stmt, store)?;
+                    }
+                    return Ok(last);
+                }
+            }
+            Err(ControlFlow::Return(Value::Error(e)))
+        }
+        v => {
+            if let Some(else_expr) = else_block {
+                eval_block(else_expr, store)
+            } else {
+                Ok(v)
+            }
+        }
     }
 }
 
