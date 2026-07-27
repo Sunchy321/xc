@@ -9,6 +9,7 @@ pub enum Value {
     Bool(bool),
     Int(i128),
     String(String),
+    Array(Vec<Value>),
 }
 
 impl Value {
@@ -65,6 +66,14 @@ impl Value {
             Bool(b) => write!(writer, "{}", b)?,
             Int(i) => write!(writer, "{}", i)?,
             String(s) => write!(writer, "\"{}\"", s)?,
+            Array(items) => {
+                write!(writer, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 { write!(writer, ", ")?; }
+                    item.print_value(writer)?;
+                }
+                write!(writer, "]")?
+            }
         }
 
         Ok(())
@@ -82,6 +91,7 @@ impl Value {
             Bool(_) => write!(writer, "bool")?,
             Int(_) => write!(writer, "int")?,
             String(_) => write!(writer, "string")?,
+            Array(items) => write!(writer, "[{}]", items.len())?,
         }
 
         Ok(())

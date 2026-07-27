@@ -34,6 +34,16 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
     Ok(match &expr.kind {
         Placeholder => return Err(err("placeholder")),
         Literal(lit) => Value::from_lit(lit).map_err(|e| err(&e))?,
+        Array(items) => {
+            let mut vals = Vec::new();
+            for item in items {
+                match item {
+                    xc_ast::expr::ExprItem::Expr(e) => vals.push(eval_inner(e, store)?),
+                    _ => {} // skip spread for now
+                }
+            }
+            Value::Array(vals)
+        }
         Paren(expr) => eval_inner(expr, store)?,
         Block(block) => eval_block(block, store)?,
         Infix(sym, exprs) => {
@@ -110,6 +120,28 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
             return Err(ControlFlow::Break(v));
         }
         Continue(_label) => return Err(ControlFlow::Continue),
+        For(pat, iter_expr, body, else_block, _kind, _label) => {
+            let iter_val = eval_inner(iter_expr, store)?;
+            match iter_val {
+                Value::Array(items) => {
+                    let mut result = Value::Void;
+                    for item in &items {
+                        bind_pattern(pat, item.clone(), store);
+                        match eval_block(body, store) {
+                            Ok(_) => {}
+                            Err(ControlFlow::Break(v)) => {
+                                result = v.unwrap_or(Value::Void);
+                                break;
+                            }
+                            Err(ControlFlow::Continue) => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    result
+                }
+                _ => return Err(err("for loop requires an array")),
+            }
+        }
         Return(val) => {
             let v = val.as_ref().map(|e| eval_inner(e, store)).transpose()?;
             return Err(ControlFlow::Return(v.unwrap_or(Value::Void)));
@@ -207,6 +239,13 @@ fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, ControlFlow> {
         (op::Plus, Int(_)) => val,
         _ => return Err(err(&format!("prefix not supported: {:?}", op.as_str()))),
     })
+}
+
+fn bind_pattern(pat: &xc_ast::pattern::Pattern, value: Value, store: &mut Store) {
+    match &pat.kind {
+        PatternKind::Bind(ident, _) => { store.set(ident.name, value); }
+        _ => {} // TODO: structured patterns
+    }
 }
 
 fn eval_block(block: &Block, store: &mut Store) -> Result<Value, ControlFlow> {

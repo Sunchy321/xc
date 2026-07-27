@@ -1304,6 +1304,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_for(&mut self) -> ParseResult<'a, P<Expr>> {
+        let lo = self.prev_token.span;
         let label = self.eat_symbol();
 
         let is_await = self.eat_keyword(kw::Await);
@@ -1314,7 +1315,35 @@ impl<'a> Parser<'a> {
             ForLoopKind::For
         };
 
-        unimplemented!()
+        let pat = self.parse_pattern()?;
+        if !self.eat(&TokenKind::Colon) {
+            return Err(self.diag_ctx().struct_span_error(
+                pat.span.to(self.token.span),
+                "expected `:` after for pattern".to_string(),
+            ));
+        }
+        let iter_expr = self.parse_expr()?;
+        let body_expr = self.parse_expr_block()?;
+        let body = if let ExprKind::Block(block) = &body_expr.kind {
+            block.clone()
+        } else {
+            unreachable!()
+        };
+
+        let else_block = if self.eat_keyword(kw::Else) {
+            let block_expr = self.parse_expr_else_part(ElseKind::Loop)?;
+            match &block_expr.kind {
+                ExprKind::Block(block) => Some(block.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        Ok(self.make_expr(
+            ExprKind::For(pat, iter_expr, body, else_block, for_kind, label),
+            lo,
+        ))
     }
 
     fn parse_expr_while(&mut self, lo: Span) -> ParseResult<'a, P<Expr>> {
