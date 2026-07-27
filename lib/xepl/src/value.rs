@@ -10,8 +10,8 @@ pub enum Value {
     Int(i128),
     String(String),
     Array(Vec<Value>),
-    Ok(Box<Value>),
-    Error(Box<Value>),
+    Okay(Box<Value>),
+    Fail(Box<Value>),
 }
 
 impl Value {
@@ -76,16 +76,17 @@ impl Value {
                 }
                 write!(writer, "]")?
             }
-            Ok(v) => { write!(writer, "ok(")?; v.print_value(writer)?; write!(writer, ")")?; }
-            Error(e) => { write!(writer, "err(")?; e.print_value(writer)?; write!(writer, ")")?; }
+            Okay(v) => { write!(writer, "ok(")?; v.print_value(writer)?; write!(writer, ")")?; }
+            Fail(e) => { write!(writer, "err(")?; e.print_value(writer)?; write!(writer, ")")?; }
         }
 
-        std::result::Result::Ok(())
+        Ok(())
     }
 
     pub fn print_type(
         &self,
         writer: &mut impl WriteColor,
+        hint: &ColorSpec,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use Value::*;
 
@@ -96,11 +97,20 @@ impl Value {
             Int(_) => write!(writer, "int")?,
             String(_) => write!(writer, "string")?,
             Array(items) => write!(writer, "[{}]", items.len())?,
-            Ok(v) => { v.print_type(writer)?; write!(writer, "!!")?; write!(writer, "?")?; }
-            Error(e) => { write!(writer, "!!")?; e.print_type(writer)?; }
+            Okay(v) => {
+                v.print_type(writer, hint)?;
+                write!(writer, "!!")?;
+                writer.set_color(hint)?;
+                write!(writer, "_")?;
+                writer.reset()?
+            }
+            Fail(e) => {
+                write!(writer, "!!")?;
+                e.print_type(writer, hint)?
+            }
         }
 
-        std::result::Result::Ok(())
+        Ok(())
     }
 }
 
@@ -115,7 +125,7 @@ pub fn println_value(
 
     write!(writer, " : ")?;
 
-    value.print_type(writer)?;
+    value.print_type(writer, hint)?;
 
     writer.reset()?;
 

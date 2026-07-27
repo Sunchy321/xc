@@ -22,7 +22,7 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
         Err(ControlFlow::Err(e)) => Err(e),
         Err(ControlFlow::Break(_)) => Err("break outside loop".to_string()),
         Err(ControlFlow::Continue) => Err("continue outside loop".to_string()),
-        Err(ControlFlow::Return(_)) => Err("return outside function".to_string()),
+        Err(ControlFlow::Return(v)) => Ok(v),
     }
 }
 
@@ -32,7 +32,7 @@ fn err(msg: &str) -> ControlFlow {
 
 fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
     use ExprKind::*;
-    std::result::Result::Ok(match &expr.kind {
+    Ok(match &expr.kind {
         Placeholder => return Err(err("placeholder")),
         Literal(lit) => Value::from_lit(lit).map_err(|e| err(&e))?,
         Array(items) => {
@@ -123,7 +123,7 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
         Continue(_label) => return Err(ControlFlow::Continue),
         Throw(val) => {
             let v = val.as_ref().map(|e| eval_inner(e, store)).transpose()?;
-            return Err(ControlFlow::Return(Value::Error(Box::new(v.unwrap_or(Value::Void)))));
+            return Err(ControlFlow::Return(Value::Fail(Box::new(v.unwrap_or(Value::Void)))));
         }
         Try(expr, catchers, else_block) => {
             match eval_inner(expr, store) {
@@ -201,8 +201,8 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
             };
             // If function has throw qualifier, wrap success in Ok
             let has_throw = !matches!(&func.sig.tail.throw, xc_ast::func::FuncThrow::None);
-            let result = if has_throw && !matches!(&result, Value::Error(_)) {
-                Value::Ok(Box::new(result))
+            let result = if has_throw && !matches!(&result, Value::Fail(_)) {
+                Value::Okay(Box::new(result))
             } else {
                 result
             };
@@ -221,7 +221,7 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
 fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, ControlFlow> {
     use Value::*;
     #[allow(unused_qualifications)]
-    std::result::Result::Ok(match (op, &lhs, &rhs) {
+    Ok(match (op, &lhs, &rhs) {
         (op::Plus, Int(a), Int(b)) => Int(a + b),
         (op::Minus, Int(a), Int(b)) => Int(a - b),
         (op::Multiply, Int(a), Int(b)) => Int(a * b),
@@ -254,7 +254,7 @@ fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, Cont
 
 fn eval_prefix(op: xc_span::Symbol, val: Value) -> Result<Value, ControlFlow> {
     use Value::*;
-    std::result::Result::Ok(match (op, &val) {
+    Ok(match (op, &val) {
         (op::Minus, Int(a)) => Int(-a),
         (op::Plus, Int(_)) => val,
         _ => return Err(err(&format!("prefix not supported: {:?}", op.as_str()))),
@@ -298,8 +298,8 @@ fn eval_inner_stmt(stmt: &xc_ast::stmt::Stmt, store: &mut Store) -> Result<Value
 
 fn try_handle(v: Value, catchers: &[xc_ast::stmt::Catcher], else_block: &Option<P<Block>>, store: &mut Store) -> Result<Value, ControlFlow> {
     match v {
-        Value::Ok(ok) => Ok(*ok),
-        Value::Error(e) => {
+        Value::Okay(ok) => Ok(*ok),
+        Value::Fail(e) => {
             for c in catchers {
                 if pattern_matches(&c.pattern, &*e) {
                     bind_pattern(&c.pattern, (*e).clone(), store);
@@ -310,7 +310,7 @@ fn try_handle(v: Value, catchers: &[xc_ast::stmt::Catcher], else_block: &Option<
                     return Ok(last);
                 }
             }
-            Err(ControlFlow::Return(Value::Error(e)))
+            Err(ControlFlow::Return(Value::Fail(e)))
         }
         v => {
             if let Some(else_expr) = else_block {
