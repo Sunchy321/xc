@@ -12,6 +12,7 @@ enum ControlFlow {
     Err(String),
     Break(Option<Value>),
     Continue,
+    Return(Value),
 }
 
 pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
@@ -20,6 +21,7 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
         Err(ControlFlow::Err(e)) => Err(e),
         Err(ControlFlow::Break(_)) => Err("break outside loop".to_string()),
         Err(ControlFlow::Continue) => Err("continue outside loop".to_string()),
+        Err(ControlFlow::Return(_)) => Err("return outside function".to_string()),
     }
 }
 
@@ -108,6 +110,10 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
             return Err(ControlFlow::Break(v));
         }
         Continue(_label) => return Err(ControlFlow::Continue),
+        Return(val) => {
+            let v = val.as_ref().map(|e| eval_inner(e, store)).transpose()?;
+            return Err(ControlFlow::Return(v.unwrap_or(Value::Void)));
+        }
         Path(path) => {
             if path.segments.len() == 1 {
                 let name = path.segments[0].ident.name;
@@ -144,13 +150,18 @@ fn eval_inner(expr: &Expr, store: &mut Store) -> Result<Value, ControlFlow> {
                 FuncBody::Arrow(expr) => eval_inner(expr, store),
                 FuncBody::Semicolon => Ok(Value::Void),
             };
+            let result = match result {
+                Ok(v) => v,
+                Err(ControlFlow::Return(v)) => v,
+                Err(e) => return Err(e),
+            };
             for (name, saved_val) in saved {
                 match saved_val {
                     Some(v) => store.set(name, v),
                     None => { store.remove(name); }
                 }
             }
-            result?
+            result
         }
         _ => return Err(err(&format!("eval: unimplemented {:?}", expr.kind))),
     })
