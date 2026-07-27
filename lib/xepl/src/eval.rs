@@ -44,6 +44,21 @@ pub fn eval(expr: &Expr, store: &mut Store) -> Result<Value, String> {
             }
             Ok(acc)
         }
+        Comparison(syms, exprs) => {
+            let mut iter_sym = syms.iter();
+            let mut iter_expr = exprs.iter();
+            let mut acc = eval(iter_expr.next().unwrap(), store)?;
+            for expr in iter_expr {
+                let sym = iter_sym.next().unwrap();
+                let rhs = eval(expr, store)?;
+                let result = eval_infix(*sym, acc, rhs.clone())?;
+                if let Value::Bool(false) = &result {
+                    return Ok(result);
+                }
+                acc = rhs;
+            }
+            Ok(Value::Bool(true))
+        }
         Prefix(sym, expr) => {
             let val = eval(expr, store)?;
             eval_prefix(*sym, val)
@@ -78,6 +93,33 @@ fn eval_infix(op: xc_span::Symbol, lhs: Value, rhs: Value) -> Result<Value, Stri
             Ok(Int(a / b))
         }
         (op::Concat, String(a), String(b)) => Ok(String(format!("{}{}", a, b))),
+
+        (op::Equal, Int(a), Int(b)) => Ok(Bool(a == b)),
+        (op::NotEqual, Int(a), Int(b)) => Ok(Bool(a != b)),
+        (op::Less, Int(a), Int(b)) => Ok(Bool(a < b)),
+        (op::Greater, Int(a), Int(b)) => Ok(Bool(a > b)),
+        (op::LessEqual, Int(a), Int(b)) => Ok(Bool(a <= b)),
+        (op::GreaterEqual, Int(a), Int(b)) => Ok(Bool(a >= b)),
+
+        (op::Equal, Bool(a), Bool(b)) => Ok(Bool(a == b)),
+        (op::NotEqual, Bool(a), Bool(b)) => Ok(Bool(a != b)),
+
+        (op::Equal, String(a), String(b)) => Ok(Bool(a == b)),
+        (op::NotEqual, String(a), String(b)) => Ok(Bool(a != b)),
+
+        (op::Equal, Nil, Nil) => Ok(Bool(true)),
+        (op::NotEqual, Nil, Nil) => Ok(Bool(false)),
+
+        (op::AndAnd, Bool(a), Bool(b)) => Ok(Bool(*a && *b)),
+        (op::OrOr, Bool(a), Bool(b)) => Ok(Bool(*a || *b)),
+
+        (op::Modulo, Int(a), Int(b)) => {
+            if *b == 0 {
+                return Err("modulo by zero".to_string());
+            }
+            Ok(Int(a % b))
+        }
+
         _ => Err(format!(
             "infix {:?} not supported for {:?} and {:?}",
             op.as_str(),
