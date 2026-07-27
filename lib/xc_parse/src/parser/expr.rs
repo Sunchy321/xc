@@ -6,10 +6,14 @@ use thin_vec::{thin_vec, ThinVec};
 use xc_ast::expr::{
     Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, StructItem
 };
+use xc_ast::decl::{Qual, QualKind};
+use xc_ast::func::{FuncBody, FuncParam, FuncReturn, FuncTail, FuncThrow};
+use xc_ast::lambda::Lambda;
 use xc_ast::literal::{self, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
-use xc_ast::stmt::Block;
+use xc_ast::pattern::PatternKind;
+use xc_ast::stmt::{Block, Catcher};
 use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
 use xc_ast::tokenstream::Spacing;
 use xc_ast::ty::Type;
@@ -792,10 +796,23 @@ impl<'a> Parser<'a> {
         let atom = if !self.token_can_begin_expr() {
             return Ok(None);
         } else {
+            // Under NO_TRAILING_BLOCK, a block `{` belongs to the enclosing construct,
+            // not to the current expression (see statement.tex §22).
+            if self.restrictions.contains(Restrictions::NO_TRAILING_BLOCK)
+                && self.check(&OpenDelim(Delimiter::Brace))
+            {
+                return Ok(None);
+            }
+
             match self.token.kind {
                 OpenDelim(Delimiter::Invisible) => return Ok(None),
 
                 Op(op) if op != op::Caret => {
+                    if op == op::Dot {
+                        self.next();
+                        return Ok(Some(self.parse_dot_part()?));
+                    }
+
                     if !self.op_ctx().is_op(op) {
                         return Err(self.diag_ctx().create_error("unknown operator"));
                     }
@@ -940,6 +957,12 @@ impl<'a> Parser<'a> {
             let expr = self.make_expr(ExprKind::Dollar, lo);
 
             Ok(expr)
+        } else if self.check_keyword(kw::This) && !self.look_ahead(1, |t| matches!(t.kind, TokenKind::ColonColon)) {
+            self.next();
+
+            let expr = self.make_expr(ExprKind::This, lo);
+
+            Ok(expr)
         } else if self.check_path() {
             self.parse_expr_path()
         } else if self.check(&OpenDelim(Delimiter::Paren)) {
@@ -948,6 +971,14 @@ impl<'a> Parser<'a> {
             self.parse_expr_block()
         } else if self.check(&OpenDelim(Delimiter::Bracket)) {
             self.parse_expr_array_dict()
+        } else if self.check_keyword(kw::Do) {
+            let lo = self.token.span;
+            let do_spacing = self.spacing; // spacing of `do`: Joint if do! follows
+            self.next(); // advance past `do`
+            let immediate = matches!(do_spacing, Spacing::Joint)
+                && matches!(self.token.kind, TokenKind::Op(sym) if sym == op::Exclamation)
+                && { self.next(); true };
+            self.parse_expr_do(lo, immediate)
         } else if self.eat_keyword(kw::If) {
             self.parse_expr_if()
         } else if self.eat_keyword(kw::For) {
@@ -958,6 +989,8 @@ impl<'a> Parser<'a> {
             self.parse_expr_match()
         } else if self.eat_keyword(kw::Return) {
             self.parse_expr_return()
+        } else if self.eat_keyword(kw::Try) {
+            self.parse_expr_try()
         } else if self.eat_keyword(kw::Throw) {
             self.parse_expr_throw()
         } else if self.eat_keyword(kw::Break) {
@@ -1343,11 +1376,125 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn parse_expr_try(&mut self) -> ParseResult<'a, P<Expr>> {
+        let lo = self.prev_token.span;
+
+        let expr = self.parse_expr()?;
+
+        let mut catchers = ThinVec::new();
+        while self.eat_keyword(kw::Catch) {
+            let (pattern, block) = if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
+                // catch { ... } — no pattern
+                let block = self.parse_block()?.into_inner();
+                let wildcard = self.make_pattern(PatternKind::Wildcard, self.prev_token.span);
+                (wildcard.into_inner(), block)
+            } else {
+                // catch pattern { ... }
+                let pattern = self.with_res(Restrictions::NO_TRAILING_BLOCK, |this| {
+                    this.parse_pattern()
+                })?;
+                let block = self.parse_block()?.into_inner();
+                (pattern.into_inner(), block)
+            };
+            catchers.push(Catcher { pattern, stmts: block.stmts });
+        }
+
+        let else_block = if self.eat_keyword(kw::Else) {
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+
+        let span = lo.to(self.prev_token.span);
+        Ok(self.make_expr(
+            ExprKind::Try(expr, catchers, else_block),
+            span,
+        ))
+    }
+
     fn parse_expr_throw(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
         let kind = ExprKind::Throw(self.parse_expr_opt()?);
         let expr = self.make_expr(kind, lo.to(self.prev_token.span));
         Ok(expr)
+    }
+
+    fn parse_expr_do(&mut self, lo: Span, immediate: bool) -> ParseResult<'a, P<Expr>> {
+        // Parse closure qualifiers (async, const, unsafe)
+        let quals = self.parse_closure_quals();
+
+        // TODO: capture list
+
+        // Parse closure parameters
+        let params = if self.check(&TokenKind::OpenDelim(Delimiter::Paren)) {
+            self.parse_func_params()?
+        } else {
+            ThinVec::new()
+        };
+
+        // do! cannot have parameters
+        if immediate && !params.is_empty() {
+            return Err(self.diag_ctx().struct_span_error(
+                lo.to(self.prev_token.span),
+                "`do!` cannot have parameters".to_string(),
+            ));
+        }
+
+        // Parse throw qualifier
+        let throw = if self.eat_keyword(kw::Throw) {
+            if self.eat(&TokenKind::OpenDelim(Delimiter::Paren)) {
+                if self.eat(&TokenKind::CloseDelim(Delimiter::Paren)) {
+                    FuncThrow::Type(ThinVec::new())
+                } else {
+                    let (types, _) = self.parse_seq_to_end(
+                        &TokenKind::CloseDelim(Delimiter::Paren),
+                        SequenceSeparator::new(TokenKind::Comma),
+                        |this| this.parse_type(),
+                    )?;
+                    FuncThrow::Type(types.into_iter().map(|ty| ty.into_inner()).collect())
+                }
+            } else {
+                FuncThrow::Inferred
+            }
+        } else {
+            FuncThrow::None
+        };
+
+        // Parse return type
+        let ret = if self.eat(&TokenKind::RightArrow) {
+            let ty = self.parse_type()?;
+            FuncReturn::Type(ty)
+        } else {
+            FuncReturn::Inferred
+        };
+
+        let tail = FuncTail { throw, ret };
+        let body = self.parse_func_body(false)?;
+
+        let lambda = Lambda { immediate, quals, params, tail, body };
+        let span = lo.to(self.prev_token.span);
+        Ok(self.make_expr(ExprKind::Lambda(P(lambda)), span))
+    }
+
+    fn parse_closure_quals(&mut self) -> ThinVec<Qual> {
+        let mut quals = ThinVec::new();
+
+        loop {
+            let span = self.token.span;
+            let kind = if self.eat_keyword(kw::Async) {
+                QualKind::Async
+            } else if self.eat_keyword(kw::Const) {
+                QualKind::Const
+            } else if self.eat_keyword(kw::Unsafe) {
+                QualKind::Unsafe
+            } else {
+                break;
+            };
+
+            quals.push(Qual { kind, span });
+        }
+
+        quals
     }
 
     fn parse_expr_break(&mut self) -> ParseResult<'a, P<Expr>> {

@@ -1,7 +1,14 @@
-use crate::ptr::P;
-use crate::stmt::Block;
+use thin_vec::ThinVec;
 
-#[derive(Clone)]
+use crate::decl::Qual;
+use crate::func::{FuncBody, FuncParam, FuncTail};
+use crate::ptr::P;
+
+#[derive(Clone, Debug)]
 pub struct Lambda {
-    pub block: P<Block>,
+    pub immediate: bool,
+    pub quals: ThinVec<Qual>,
+    pub params: ThinVec<FuncParam>,
+    pub tail: FuncTail,
+    pub body: FuncBody,
 }

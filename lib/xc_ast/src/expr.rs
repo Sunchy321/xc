@@ -8,9 +8,10 @@ use xc_span::{Identifier, Span, Symbol};
 use crate::expr;
 use crate::literal::Literal;
 use crate::path::Path;
+use crate::lambda::Lambda;
 use crate::pattern::Pattern;
 use crate::ptr::P;
-use crate::stmt::Block;
+use crate::stmt::{Block, Catcher};
 use crate::ty::{Type, TypeKind};
 
 #[derive(Clone, Debug)]
@@ -46,6 +47,8 @@ pub enum ExprKind {
 
     /// `{ some_expr }`
     Block(P<Block>),
+    /// Closure expression (`do { ... }`, `do! { ... }`, `do(x: int) { ... }`)
+    Lambda(P<Lambda>),
     /// `if cond { then } else { else }`
     If(P<Expr>, P<Expr>, Option<P<Expr>>),
     /// `match expr { pat => body }`
@@ -90,8 +93,8 @@ pub enum ExprKind {
 
     /// Prefix exprs (`-a`)
     Prefix(Symbol, P<Expr>),
-    /// Try exprs (`try foo()`)
-    Try(P<Expr>),
+    /// Try exprs (`try foo()`, `try foo() catch e { ... }`)
+    Try(P<Expr>, ThinVec<Catcher>, Option<P<Block>>),
 
     /// Infix exprs (`a + b`)
     Infix(Symbol, ThinVec<P<Expr>>),
@@ -135,6 +138,11 @@ impl ExprKind {
             AnonEnumerator(_) => ExprFlags::empty(),
 
             Block(block) => block.expr_flags(),
+            Lambda(lambda) => match &lambda.body {
+                crate::func::FuncBody::Semicolon => ExprFlags::empty(),
+                crate::func::FuncBody::Block(block) => block.expr_flags(),
+                crate::func::FuncBody::Arrow(expr) => expr.flags,
+            },
 
             If(cond, then, else_) => {
                 cond.flags.difference(ExprFlags::CONTAIN_NIL_COALESCE)
@@ -196,7 +204,17 @@ impl ExprKind {
             Await(expr) => expr.flags,
 
             Prefix(_, expr) => expr.flags,
-            Try(expr) => expr.flags,
+            Try(expr, catchers, else_block) => {
+                expr.flags
+                    | catchers.iter().fold(ExprFlags::empty(), |f, c| {
+                        f | c.stmts.iter().fold(ExprFlags::empty(), |flags, s| {
+                            flags | s.kind.expr_flags()
+                        })
+                    })
+                    | else_block
+                        .as_ref()
+                        .map_or(ExprFlags::empty(), |b| b.expr_flags())
+            }
 
             Infix(op, exprs) => {
                 if *op == op::NullCoalescing {

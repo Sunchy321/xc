@@ -30,6 +30,9 @@ pub enum TypeKind {
     DynType(P<Type>),
     Class(P<Type>),
 
+    /// Named type — an identifier reference like `Foo`
+    Named(Symbol),
+
     ImplicitThis,
 }
 

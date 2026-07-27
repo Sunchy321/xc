@@ -12,7 +12,7 @@ use xc_span::{Identifier, Span};
 
 use super::attr::{ForceCollect, TrailingToken};
 use super::parser::Parser;
-use super::ParseResult;
+use super::{ParseResult, SequenceSeparator};
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_func(&mut self, quals: ThinVec<Qual>, _lo: Span) -> ParseResult<'a, Func> {
@@ -55,7 +55,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_func_params(&mut self) -> ParseResult<'a, ThinVec<FuncParam>> {
+    pub(crate) fn parse_func_params(&mut self) -> ParseResult<'a, ThinVec<FuncParam>> {
         let mut first_param = true;
 
         let (params, _) = self.parse_paren_comma_seq(|this| {
@@ -200,7 +200,18 @@ impl<'a> Parser<'a> {
         // parse throw specifiers.
         let throw = if self.eat_keyword(kw::Throw) {
             if self.eat(&TokenKind::OpenDelim(Delimiter::Paren)) {
-                todo!()
+                if self.eat(&TokenKind::CloseDelim(Delimiter::Paren)) {
+                    // throw() — explicit nothrow
+                    FuncThrow::Type(ThinVec::new())
+                } else {
+                    // throw(E1, E2, ...) — explicit type list
+                    let (types, _) = self.parse_seq_to_end(
+                        &TokenKind::CloseDelim(Delimiter::Paren),
+                        SequenceSeparator::new(TokenKind::Comma),
+                        |this| this.parse_type(),
+                    )?;
+                    FuncThrow::Type(types.into_iter().map(|ty| ty.into_inner()).collect())
+                }
             } else {
                 FuncThrow::Inferred
             }
@@ -218,7 +229,7 @@ impl<'a> Parser<'a> {
         Ok(FuncTail { throw, ret })
     }
 
-    fn parse_func_body(&mut self, require_body: bool) -> ParseResult<'a, FuncBody> {
+    pub(crate) fn parse_func_body(&mut self, require_body: bool) -> ParseResult<'a, FuncBody> {
         let has_semi = if require_body {
             self.token.kind == TokenKind::Semicolon
         } else {

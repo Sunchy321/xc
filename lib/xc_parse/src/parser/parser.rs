@@ -67,7 +67,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn with_res<T>(&mut self, res: Restrictions, f: impl FnOnce(&mut Self) -> T) -> T {
         let old = self.restrictions;
-        self.restrictions = res;
+        self.restrictions |= res;
         let result = f(self);
         self.restrictions = old;
         result

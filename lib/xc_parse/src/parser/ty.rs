@@ -116,6 +116,11 @@ impl<'a> Parser<'a> {
                     }
                 },
 
+                Identifier(name, _) => {
+                    self.next();
+                    TypeKind::Named(name)
+                }
+
                 _ => unimplemented!(),
             }
         };

@@ -9,7 +9,7 @@ use super::HasTrailing;
 use super::{parser::Parser, ParseResult, Restrictions};
 
 impl<'a> Parser<'a> {
-    fn make_pattern(&self, kind: PatternKind, span: Span) -> P<Pattern> {
+    pub(crate) fn make_pattern(&self, kind: PatternKind, span: Span) -> P<Pattern> {
         P(Pattern {
             kind,
             assert: None,

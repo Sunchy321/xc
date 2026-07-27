@@ -54,6 +54,27 @@ fn test_expr() {
 }
 
 #[test]
+fn test_this_expr() {
+    create_session_globals_then(|| {
+        string_to_expr("this".to_string());
+        string_to_expr("this.foo".to_string());
+        string_to_expr("this()".to_string());
+    });
+}
+
+#[test]
+fn test_try_expr() {
+    create_session_globals_then(|| {
+        string_to_expr("try foo()".to_string());
+        string_to_expr("try foo() catch e { bar() }".to_string());
+        string_to_expr("try foo() catch e { bar() } catch f { baz() }".to_string());
+        string_to_expr("try foo() else { baz() }".to_string());
+        string_to_expr("try foo() catch e { bar() } else { baz() }".to_string());
+        string_to_expr("try foo() catch { bar() }".to_string());
+    });
+}
+
+#[test]
 fn test_block() {
     create_session_globals_then(|| {
         string_to_expr("{ }".to_string());
@@ -125,6 +146,19 @@ fn test_decl() {
 }
 
 #[test]
+fn test_do_expr() {
+    create_session_globals_then(|| {
+        string_to_expr("do { }".to_string());
+        string_to_expr("do { 1 + 2 }".to_string());
+        string_to_expr("do throw { }".to_string());
+        string_to_expr("do throw(E) { }".to_string());
+        string_to_expr("do async { }".to_string());
+        string_to_expr("do! { }".to_string());
+        string_to_expr("do! { 1 + 2 }".to_string());
+    });
+}
+
+#[test]
 fn test_func() {
     create_session_globals_then(|| {
         string_to_decl("func foo() { }".to_string());
@@ -132,6 +166,10 @@ fn test_func() {
         string_to_decl("func foo(&mut this) { }".to_string());
         string_to_decl("func foo(this: int) { }".to_string());
         string_to_decl("func foo(a: int) -> void { }".to_string());
+        string_to_decl("func foo() throw { }".to_string());
+        string_to_decl("func foo() throw() { }".to_string());
+        string_to_decl("func foo() throw(E) { }".to_string());
+        string_to_decl("func foo() throw(E1, E2) { }".to_string());
     })
 }
 
