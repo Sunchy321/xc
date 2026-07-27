@@ -1322,7 +1322,7 @@ impl<'a> Parser<'a> {
                 "expected `:` after for pattern".to_string(),
             ));
         }
-        let iter_expr = self.parse_expr()?;
+        let iter_expr = self.with_res(Restrictions::NO_TRAILING_BLOCK, |this| this.parse_expr())?;
         let body_expr = self.parse_expr_block()?;
         let body = if let ExprKind::Block(block) = &body_expr.kind {
             block.clone()

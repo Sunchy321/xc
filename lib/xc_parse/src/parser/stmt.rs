@@ -33,8 +33,8 @@ impl<'a> Parser<'a> {
 
             let stmt = match self.parse_full_stmt() {
                 Ok(stmt) => stmt,
-                Err(..) => {
-                    todo!();
+                Err(err) => {
+                    return Err(err);
                 }
             };
 
