@@ -35,6 +35,7 @@ bitflags::bitflags! {
         const PAT_IN_LET = 1 << 4;
         const PAT_IN_LET_MUT = 1 << 5;
         const NO_TRAILING_BLOCK = 1 << 6;
+        const NO_EQUAL = 1 << 7;
     }
 }
 

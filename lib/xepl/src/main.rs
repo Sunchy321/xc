@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let session = ParseSession::new();
 
-    let store = Store::new();
+    let mut store = Store::new();
 
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
 
@@ -39,13 +39,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut source = String::new();
 
-        stdin().read_line(&mut source)?;
+        let n = stdin().read_line(&mut source)?;
 
-        if source == "" {
+        if n == 0 {
+            return Ok(());
+        }
+
+        if source.trim().is_empty() {
             continue;
         }
 
         let name = Filename::Repl;
+
+        // Wrap input in { } to support both expressions and statements
+        let source = format!("{{ {} }}", source.trim());
 
         let mut parser = parser_from_source_str(&session, name, source);
 
@@ -59,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let result = match eval(&*expr) {
+        let result = match eval(&*expr, &mut store) {
             Ok(result) => result,
             Err(err) => {
                 stdout.set_color(&error)?;

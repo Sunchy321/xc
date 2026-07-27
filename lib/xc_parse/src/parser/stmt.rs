@@ -2,7 +2,7 @@ use thin_vec::ThinVec;
 use xc_ast::ptr::P;
 use xc_ast::stmt::{Block, Stmt, StmtKind};
 use xc_ast::token::{Delimiter, TokenKind};
-use xc_span::symbol::kw;
+use xc_span::symbol::{kw, op};
 use xc_span::Span;
 
 use super::Restrictions;
@@ -61,6 +61,7 @@ impl<'a> Parser<'a> {
         let mut add_semi = false;
 
         match &mut stmt.kind {
+            StmtKind::Let(..) | StmtKind::ExprSemi(..) | StmtKind::Empty => {}
             Expr(expr)
                 if expr.require_semi_to_be_stmt() &&
                     // TODO: Expr::attr
@@ -79,7 +80,7 @@ impl<'a> Parser<'a> {
                 );
             }
 
-            Expr(..) => {}
+            Expr(..) | StmtKind::Let(..) => {}
 
             Empty | ExprSemi(..) => {
                 eat_semi = false;
@@ -99,7 +100,15 @@ impl<'a> Parser<'a> {
         let lo = self.token.span;
 
         let stmt = if self.token.is_keyword(kw::Let) {
-            unimplemented!()
+            self.next();
+            let pat = self.with_res(Restrictions::PAT_IN_LET | Restrictions::NO_EQUAL, |this| this.parse_pattern())?;
+            let init = if self.eat(&TokenKind::Op(op::Assign)) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            let span = lo.to(self.prev_token.span);
+            self.make_stmt(StmtKind::Let(pat, init), span)
         } else if self.eat(&TokenKind::Semicolon) {
             self.make_stmt(StmtKind::Empty, lo)
         } else if self.token.kind != TokenKind::CloseDelim(Delimiter::Brace) {

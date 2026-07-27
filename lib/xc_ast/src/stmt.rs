@@ -9,6 +9,7 @@ use crate::ptr::P;
 pub enum StmtKind {
     Expr(P<Expr>),
     ExprSemi(P<Expr>),
+    Let(P<Pattern>, Option<P<Expr>>),
     Empty
 }
 
@@ -17,6 +18,7 @@ impl StmtKind {
         match self {
             StmtKind::Expr(expr) => expr.flags,
             StmtKind::ExprSemi(expr) => expr.flags,
+            StmtKind::Let(_, init) => init.as_ref().map_or(ExprFlags::empty(), |e| e.flags),
             StmtKind::Empty => ExprFlags::empty(),
         }
     }

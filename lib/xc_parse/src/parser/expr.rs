@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
                 let mut style = None;
 
                 for (op, _) in operators.iter() {
-                    if *op == op::Equal {
+                    if *op == op::Assign {
                         match style {
                             None => style = Some(ComparisonStyle::UnknownChain),
                             Some(
@@ -796,10 +796,16 @@ impl<'a> Parser<'a> {
         let atom = if !self.token_can_begin_expr() {
             return Ok(None);
         } else {
-            // Under NO_TRAILING_BLOCK, a block `{` belongs to the enclosing construct,
-            // not to the current expression (see statement.tex §22).
+            // Under NO_TRAILING_BLOCK, a block `{` belongs to the enclosing construct
             if self.restrictions.contains(Restrictions::NO_TRAILING_BLOCK)
                 && self.check(&OpenDelim(Delimiter::Brace))
+            {
+                return Ok(None);
+            }
+
+            // Under NO_EQUAL, '=' stops expression parsing (for let patterns)
+            if self.restrictions.contains(Restrictions::NO_EQUAL)
+                && self.check(&TokenKind::Op(op::Assign))
             {
                 return Ok(None);
             }
