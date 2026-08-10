@@ -1355,7 +1355,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_for(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
-        let label = self.eat_symbol();
+        let label = self.eat_label();
 
         let is_await = self.eat_keyword(kw::Await);
 
@@ -1397,7 +1397,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_while(&mut self, lo: Span) -> ParseResult<'a, P<Expr>> {
-        let label = self.eat_symbol();
+        let label = self.eat_label();
 
         let cond = self.parse_expr_cond(false).map_err(|mut err| {
             err.span_label(
@@ -1590,7 +1590,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_break(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
-        let label = self.eat_symbol();
+        let label = self.eat_label();
         let kind = ExprKind::Break(self.parse_expr_opt()?, label);
         let expr = self.make_expr(kind, lo.to(self.prev_token.span));
         Ok(expr)
@@ -1598,7 +1598,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_continue(&mut self) -> ParseResult<'a, P<Expr>> {
         let lo = self.prev_token.span;
-        let label = self.eat_symbol();
+        let label = self.eat_label();
         let kind = ExprKind::Continue(label);
         let expr = self.make_expr(kind, lo.to(self.prev_token.span));
         Ok(expr)

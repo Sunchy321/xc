@@ -55,8 +55,8 @@ pub enum TokenKind {
     /// ,
     Comma,
 
-    /// '(
-    SymbolOpen,
+    /// 'a 生命期
+    Lifetime,
     /// ::
     ColonColon,
     /// ->
@@ -77,7 +77,7 @@ pub enum LiteralKind {
     Char { terminated: bool },
     String { terminated: bool },
     RawString { at_count: Option<u32> },
-    SymbolLit,
+    NameLit,
 }
 
 #[derive(Clone)]
@@ -144,6 +144,8 @@ impl<'a> Cursor<'a> {
             }
 
             '\'' => self.char_symbol_op(),
+
+            '\\' => self.name_literal(),
 
             '#' => Pound,
             '(' => OpenParen,
@@ -428,13 +430,10 @@ impl<'a> Cursor<'a> {
             '\\' => Char { terminated: self.character() },
             '\'' => Char { terminated: self.character() },
             _ if self.peek_second() == '\'' => Char { terminated: self.character() },
-            '(' => { self.next(); return SymbolOpen },
             c if is_operator_part(c) => return self.operator(c),
-            c if is_id_start(c) => self.symbol(),
+            c if is_id_start(c) => return self.lifetime(),
             _ => Char { terminated: self.character() },
         };
-
-        let suffix_start = self.curr_len();
 
         match kind {
             Char { terminated } => {
@@ -442,9 +441,6 @@ impl<'a> Cursor<'a> {
                 if terminated {
                     self.eat_suffix();
                 }
-                Literal { kind, suffix_start }
-            }
-            SymbolLit => {
                 Literal { kind, suffix_start }
             }
             _ => unreachable!("Invalid character literal kind: {:?}", kind)
@@ -475,12 +471,21 @@ impl<'a> Cursor<'a> {
         false
     }
 
-    fn symbol(&mut self) -> LiteralKind {
+    fn lifetime(&mut self) -> TokenKind {
         debug_assert!(self.prev() == '\'' && is_id_start(self.peek()));
 
         self.eat_identifier();
 
-        SymbolLit
+        Lifetime
+    }
+
+    fn name_literal(&mut self) -> TokenKind {
+        debug_assert!(self.prev() == '\\');
+
+        self.eat_identifier();
+
+        let suffix_start = self.curr_len();
+        Literal { kind: NameLit, suffix_start }
     }
 
     fn numeric(&mut self, first: char) -> LiteralKind {

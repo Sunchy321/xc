@@ -102,19 +102,6 @@ impl<'a> Parser<'a> {
         } else {
             match self.token.kind {
                 OpenDelim(Delimiter::Paren) => self.parse_type_struct_or_paren()?,
-                SymbolOpen => unimplemented!("symbol type"),
-
-                Literal(sym) => match sym.kind {
-                    LiteralKind::SymbolLit => TypeKind::SymbolType(sym.value),
-
-                    _ => {
-                        let msg = format!("expected type, found {}", unimplemented!());
-                        let mut err = self.diag_ctx().struct_span_error(self.token.span, msg);
-
-                        err.span_label(self.token.span, "expected type");
-                        return Err(err);
-                    }
-                },
 
                 Identifier(name, _) => {
                     self.next();

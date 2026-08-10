@@ -42,6 +42,7 @@ define_symbols! {
         Internal: "internal",
         Is: "is",
         Let: "let",
+        Linear: "linear",
         Macro: "macro",
         Match: "match",
         Module: "module",

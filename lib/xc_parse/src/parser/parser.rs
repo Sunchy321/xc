@@ -207,16 +207,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn eat_symbol(&mut self) -> Option<Symbol> {
+    pub fn eat_label(&mut self) -> Option<Symbol> {
         match self.token.kind {
-            TokenKind::Literal(lit) => match lit.kind {
-                LiteralKind::SymbolLit => {
-                    self.next();
-                    Some(lit.value)
-                }
-
-                _ => None,
-            },
+            TokenKind::Lifetime(name) => {
+                self.next();
+                Some(name)
+            }
 
             _ => None,
         }

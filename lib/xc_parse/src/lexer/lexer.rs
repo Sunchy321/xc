@@ -132,7 +132,10 @@ impl<'a, 'src> Lexer<'a, 'src> {
                 xc_lexer::TokenKind::Colon => TokenKind::Colon,
                 xc_lexer::TokenKind::Comma => TokenKind::Comma,
 
-                xc_lexer::TokenKind::SymbolOpen => TokenKind::SymbolOpen,
+                xc_lexer::TokenKind::Lifetime => {
+                    let name = self.symbol_from_to(start + BytePos(1), self.pos);
+                    TokenKind::Lifetime(name)
+                }
                 xc_lexer::TokenKind::ColonColon => TokenKind::ColonColon,
                 xc_lexer::TokenKind::RightArrow => TokenKind::RightArrow,
                 xc_lexer::TokenKind::FatArrow => TokenKind::FatArrow,
@@ -257,8 +260,8 @@ impl<'a, 'src> Lexer<'a, 'src> {
                 self.proc_character(LiteralKind::Char, start, end, 1, 1)
             }
 
-            xc_lexer::LiteralKind::SymbolLit => (
-                LiteralKind::SymbolLit,
+            xc_lexer::LiteralKind::NameLit => (
+                LiteralKind::NameLit,
                 self.symbol_from_to(start + BytePos(1), end),
             ),
         }

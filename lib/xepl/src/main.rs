@@ -62,6 +62,7 @@ fn highlight_x(input: &str) -> Cow<'_, str> {
         "func", "let", "if", "else", "return", "throw", "try", "catch", "break", "continue",
         "while", "for", "match", "async", "const", "unsafe", "extern", "this", "nil", "true",
         "false", "mut", "operator", "in", "is", "as", "do", "class", "trait", "impl", "type",
+        "defer", "linear",
     ];
     let ctx_kw: &[&str] = &["then", "get", "set", "didSet", "willSet", "lazy", "once",
                             "root", "super", "infix", "prefix", "suffix"];
@@ -124,7 +125,7 @@ fn highlight_x(input: &str) -> Cow<'_, str> {
                 LiteralKind::Char { .. } | LiteralKind::String { .. } | LiteralKind::RawString { .. } => {
                     format!("{}{}{}", str_green, t.text, reset)
                 }
-                LiteralKind::SymbolLit => t.text.to_string(),
+                LiteralKind::NameLit => format!("{}{}{}", num_cyan, t.text, reset),
             },
             TokenKind::LineComment | TokenKind::BlockComment { .. } => {
                 format!("{}{}{}", comment_gray, t.text, reset)

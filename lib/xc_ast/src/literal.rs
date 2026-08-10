@@ -13,7 +13,7 @@ pub enum LiteralKind {
     String,
     RawString { at_count: u32 },
     Char,
-    SymbolLit,
+    NameLit,
     Error
 }
 
@@ -55,6 +55,7 @@ impl fmt::Display for Literal {
         } = self;
 
         match kind {
+            Nil => write!(f, "nil")?,
             Bool | Integer | Floating | Error => {
                 write!(f, "{value}")?
             }
@@ -62,7 +63,8 @@ impl fmt::Display for Literal {
             RawString { at_count } => {
                 write!(f, "{count}\"{value}\"{count}", count = "@".repeat(*at_count as usize))?
             }
-            Symbol => write!(f, "'{value}")?,
+            Char => write!(f, "'{value}'")?,
+            NameLit => write!(f, "\\{value}")?,
         }
 
         if let Some(suffix) = suffix {

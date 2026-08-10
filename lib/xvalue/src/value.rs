@@ -2,6 +2,7 @@ use std::fmt;
 
 use xc_ast::literal::{Literal, LiteralKind};
 use xc_span::symbol::kw;
+use xc_span::Symbol;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -10,6 +11,7 @@ pub enum Value {
     Bool(bool),
     Int(i128),
     String(String),
+    Symbol(Symbol),
     Array(Vec<Value>),
 }
 
@@ -34,6 +36,7 @@ impl Value {
                 )
             }
             String => Value::String(lit.value.to_string()),
+            NameLit => Value::Symbol(lit.value),
             _ => return Err(format!("unsupported literal in this build: {lit}")),
         })
     }
@@ -46,6 +49,7 @@ pub fn write_value(v: &Value, out: &mut impl fmt::Write) -> fmt::Result {
         Value::Bool(b) => write!(out, "{b}"),
         Value::Int(i) => write!(out, "{i}"),
         Value::String(s) => write!(out, "{s}"),
+        Value::Symbol(s) => write!(out, "\\{s}"),
         Value::Array(items) => {
             write!(out, "[")?;
             for (i, item) in items.iter().enumerate() {

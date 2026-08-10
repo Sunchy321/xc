@@ -71,6 +71,7 @@ impl<'a> Parser<'a> {
                 check_qual!(Async);
                 check_qual!(Const);
                 check_qual!(Extern);
+                check_qual!(Linear);
                 check_qual!(Partial);
                 check_qual!(Static);
                 check_qual!(Unsafe);
