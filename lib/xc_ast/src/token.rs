@@ -230,7 +230,7 @@ fn ident_can_begin_expr(name: Symbol, is_raw: IdentIsRaw, span: Span) -> bool {
             kw::False,
             kw::For,
             kw::If,
-            kw::Let,
+            // kw::Let — `let` is a statement keyword, not an expression starter
             kw::Match,
             kw::Nil,
             kw::Operator,

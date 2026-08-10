@@ -179,3 +179,17 @@ fn test_trait() {
         string_to_decl("trait X { }".to_string());
     })
 }
+
+#[test]
+fn missing_semicolon_before_let_parses_two_statements() {
+    create_session_globals_then(|| {
+        let session = ParseSession::new();
+        let mut parser = parser_from_source_str(
+            &session,
+            Filename::Normal("test".into()),
+            "{ 1 let x = 2 }".to_string(),
+        );
+        let block = parser.parse_block().expect("block parses");
+        assert_eq!(block.stmts.len(), 2, "`1` and `let x = 2` are two statements");
+    });
+}
