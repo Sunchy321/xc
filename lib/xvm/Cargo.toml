@@ -1,0 +1,11 @@
+[package]
+name = "xvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thin-vec = "0.2.13"
+xc_ast = { version = "0.1.0", path = "../xc_ast" }
+xc_check = { version = "0.1.0", path = "../xc_check" }
+xc_span = { version = "0.1.0", path = "../xc_span" }
+xvalue = { version = "0.1.0", path = "../xvalue" }

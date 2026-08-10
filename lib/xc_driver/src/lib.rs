@@ -1,46 +1,62 @@
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-use std::process;
-use std::time::Instant;
+use xc_check::{check, parse_program};
+use xc_span::create_session_globals_then;
+use xc_span::source_map::Filename;
+use xvm::{compile, run};
 
-use xc_error::fatal::{FatalError, FatalErrorMarker};
-use xc_error::ErrorGuaranteed;
-
-pub fn main() -> ! {
-    let start_time = Instant::now();
-
-    let exit_code = catch_with_exit_code(|| {
-        Ok(())
-    });
-
-    process::exit(exit_code);
-}
-
-pub fn catch_fatal_error<R>(f: impl FnOnce() -> R) -> Result<R, FatalError> {
-    catch_unwind(AssertUnwindSafe(f)).map_err(|value| {
-        if value.is::<FatalErrorMarker>() {
-            FatalError
-        } else {
-            resume_unwind(value)
-        }
+pub fn run_source(name: Filename, source: &str) -> Result<String, String> {
+    create_session_globals_then(|| {
+        let parsed = parse_program(name, source)?;
+        let program = check(parsed)?;
+        let chunks = compile(&program)?;
+        run(&chunks, source)
     })
 }
 
-pub const EXIT_SUCCESS: i32 = 0;
-pub const EXIT_FAILURE: i32 = 1;
-
-pub fn catch_with_exit_code(f: impl FnOnce() -> Result<(), ErrorGuaranteed>) -> i32 {
-    match catch_fatal_error(f) {
-        Ok(Ok(())) => EXIT_SUCCESS,
-        _ => EXIT_FAILURE,
+pub fn main() -> ! {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 3 && args[1] == "run" {
+        let path = &args[2];
+        match std::fs::read_to_string(path) {
+            Ok(source) => match run_source(Filename::Normal(path.clone()), &source) {
+                Ok(out) => {
+                    print!("{out}");
+                    std::process::exit(0);
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            },
+            Err(err) => {
+                eprintln!("error: cannot read {path}: {err}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("usage: x run <file.x>");
+        std::process::exit(2);
     }
 }
 
-pub struct RunCompiler {
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl RunCompiler {
-    pub fn new() -> Self {
-        Self { }
+    #[test]
+    fn hello_runs() {
+        let out = run_source(Filename::Normal("test".into()), "print(\"hi\");").unwrap();
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn undefined_function_is_reported() {
+        let err = run_source(Filename::Normal("test".into()), "foo(1);").unwrap_err();
+        assert!(err.contains("undefined function: foo"), "{err}");
+    }
+
+    #[test]
+    fn division_by_zero_is_reported() {
+        let err = run_source(Filename::Normal("test".into()), "print(1 / 0);").unwrap_err();
+        assert!(err.contains("division by zero"), "{err}");
     }
 }
-

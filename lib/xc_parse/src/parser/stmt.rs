@@ -67,7 +67,7 @@ impl<'a> Parser<'a> {
                     // TODO: Expr::attr
                     ![TokenKind::Eof, TokenKind::Semicolon, TokenKind::CloseDelim(Delimiter::Brace)].contains(&self.token.kind) =>
             {
-                todo!()
+                // Missing semicolon: accepted leniently; trailing `;` stays optional.
             }
 
             Expr(expr) if self.token.kind != TokenKind::Eof && expr.require_semi_to_be_stmt() => {

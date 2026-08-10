@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+xc_check = { version = "0.1.0", path = "../xc_check" }
 xc_error = { version = "0.1.0", path = "../xc_error" }
+xc_span = { version = "0.1.0", path = "../xc_span" }
+xvm = { version = "0.1.0", path = "../xvm" }

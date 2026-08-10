@@ -35,6 +35,12 @@ enum ExprAtomGroup {
     InfixOp(Symbol, Span),
 }
 
+enum StmtExprDecision {
+    Stop,
+    Error(String),
+    Continue,
+}
+
 impl<'a> Parser<'a> {
     pub(self) fn op_ctx(&self) -> &OpContext {
         &self.session.op_ctx
@@ -306,12 +312,15 @@ impl<'a> Parser<'a> {
                                 };
 
                                 for i in infix_lo..infix_hi {
-                                    if ops[0..i]
-                                        .into_iter()
-                                        .all(|a| a.can_be_prefix_op(self.op_ctx()))
-                                        && ops[i + 1..]
+                                    // Layout is [suffixes][infix][prefixes]: suffixes bind
+                                    // to the left operand, prefixes to the right.
+                                    if matches!(&ops[i].kind, ExprAtomKind::Op(..))
+                                        && ops[0..i]
                                             .into_iter()
                                             .all(|a| a.can_be_suffix_op(self.op_ctx()))
+                                        && ops[i + 1..]
+                                            .into_iter()
+                                            .all(|a| a.can_be_prefix_op(self.op_ctx()))
                                     {
                                         possible_infix.push(i);
                                     }
@@ -328,9 +337,7 @@ impl<'a> Parser<'a> {
                                 }
 
                                 let suffixes = ops.drain(..possible_infix[0]).collect();
-                                let prefixes = ops.drain(possible_infix[0] + 1..).collect();
-
-                                let infix = match ops.pop().unwrap() {
+                                let infix = match ops.remove(0) {
                                     ExprAtom {
                                         kind: Op(sym, _),
                                         span,
@@ -338,6 +345,7 @@ impl<'a> Parser<'a> {
                                     } => (sym, span),
                                     _ => unreachable!(),
                                 };
+                                let prefixes = ops.drain(..).collect();
 
                                 vec![
                                     ExprAtomGroup::SuffixOp(suffixes),
@@ -429,7 +437,7 @@ impl<'a> Parser<'a> {
         // == -> + -> *
         //    -> `some operators without precedence`
         let main_info = infos.into_iter().fold(vec![], |maxes: Vec<OpInfo>, p| {
-            let mut less_than_some = false;
+            let mut some_greater = false;
             let mut equal_with_some = false;
 
             let mut maxes = maxes
@@ -437,20 +445,20 @@ impl<'a> Parser<'a> {
                 .filter(
                     |v| match v.precedence.partial_cmp(&p.precedence, self.op_ctx()) {
                         None => true,
-                        Some(Ordering::Less) => {
-                            less_than_some = true;
-                            true
-                        }
+                        Some(Ordering::Less) => false,
                         Some(Ordering::Equal) => {
                             equal_with_some = true;
                             true
                         }
-                        Some(Ordering::Greater) => false,
+                        Some(Ordering::Greater) => {
+                            some_greater = true;
+                            true
+                        }
                     },
                 )
                 .collect_vec();
 
-            if !less_than_some && !equal_with_some {
+            if !some_greater && !equal_with_some {
                 maxes.push(p);
             }
 
@@ -783,11 +791,53 @@ impl<'a> Parser<'a> {
     fn collect_expr_atoms(&mut self) -> ParseResult<'a, Vec<ExprAtom>> {
         let mut atoms = Vec::new();
 
-        while let Some(atom) = self.collect_expr_atom()? {
-            atoms.push(atom);
+        loop {
+            // Mirror rustc's should_continue_as_assoc_expr: a complete statement-level
+            // expression (if/while/for/match/block) ends the statement, unless the
+            // following token is a definitely-binary operator (which requires parens).
+            match self.stmt_expr_decision(&atoms) {
+                Some(StmtExprDecision::Stop) => break,
+                Some(StmtExprDecision::Error(msg)) => {
+                    return Err(self.diag_ctx().create_error(msg));
+                }
+                Some(StmtExprDecision::Continue) | None => {}
+            }
+
+            match self.collect_expr_atom()? {
+                Some(atom) => atoms.push(atom),
+                None => break,
+            }
         }
 
         Ok(atoms)
+    }
+
+    fn stmt_expr_decision(&self, atoms: &[ExprAtom]) -> Option<StmtExprDecision> {
+        if !self.restrictions.contains(Restrictions::STMT_EXPR) {
+            return None;
+        }
+        // Statement-leading case: the atoms so far are exactly one complete
+        // control-flow expression.
+        let complete = match atoms {
+            [ExprAtom { kind: ExprAtomKind::Primary(e), .. }] => e.is_complete(),
+            _ => false,
+        };
+        if !complete {
+            return None;
+        }
+        match self.token.kind {
+            // Prefix-capable operators are ambiguous: `if .. } - 3` may mean a new
+            // `-3` statement, so end the statement (rustc ends for these too).
+            TokenKind::Op(sym) if sym == op::Plus || sym == op::Minus => Some(StmtExprDecision::Stop),
+            // Definitely-binary operators are only valid as an expression
+            // continuation, which requires explicit parentheses.
+            TokenKind::Op(sym) if self.op_ctx().is_op(sym) => Some(StmtExprDecision::Error(
+                "an operator cannot follow a statement-level if/while/for expression; \
+                 parenthesize it to use the value"
+                    .to_string(),
+            )),
+            _ => Some(StmtExprDecision::Stop),
+        }
     }
 
     fn collect_expr_atom(&mut self) -> ParseResult<'a, Option<ExprAtom>> {
@@ -1315,7 +1365,7 @@ impl<'a> Parser<'a> {
             ForLoopKind::For
         };
 
-        let pat = self.parse_pattern()?;
+        let pat = self.with_res(Restrictions::PAT_IN_LET, |this| this.parse_pattern())?;
         if !self.eat(&TokenKind::Colon) {
             return Err(self.diag_ctx().struct_span_error(
                 pat.span.to(self.token.span),
