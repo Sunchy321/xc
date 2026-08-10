@@ -28,6 +28,7 @@ pub enum QualKind {
     Async,
     Const,
     Extern,
+    Linear,
     Partial,
     Static,
     Unsafe,

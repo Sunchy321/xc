@@ -48,8 +48,8 @@ pub enum TokenKind {
     /// ,
     Comma,
 
-    /// '(
-    SymbolOpen,
+    /// 'a 生命期
+    Lifetime(Symbol),
     /// ::
     ColonColon,
     /// ->
@@ -84,7 +84,7 @@ impl TokenKind {
         use TokenKind::*;
 
         match self {
-            At | Pound | Dollar | Semicolon | Colon | Comma | SymbolOpen | ColonColon
+            At | Pound | Dollar | Semicolon | Colon | Comma | ColonColon
             | RightArrow | FatArrow | DotDotDot | Op(_) | OpenDelim(_) | CloseDelim(_) => true,
             _ => false,
         }
@@ -171,11 +171,12 @@ impl Token {
             Colon => false,
             Comma => false,
 
-            SymbolOpen => true,
             ColonColon => true,
             RightArrow => false,
             FatArrow => false,
             DotDotDot => false,
+
+            Lifetime(..) => false,
 
             Op(..) => true,
 

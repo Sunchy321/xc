@@ -8,8 +8,6 @@ use crate::ty::Type;
 pub enum UnqualID {
     /// `foo`
     Identifier(Symbol),
-    /// `'then`
-    SymbolLit(Symbol),
     /// `init`
     Init,
     /// `operator infix+`
