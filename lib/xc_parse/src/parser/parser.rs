@@ -34,6 +34,10 @@ pub struct Parser<'a> {
 
     pub(crate) token_cursor: TokenCursor,
 
+    /// Whether the most recent type primary was a parenthesized field list
+    /// using `;` as its separator (see `parse_paren_sep_seq`).
+    pub(crate) paren_sep_is_semi: bool,
+
     next_call_count: usize,
     break_last_token: usize,
     unmatched_angle_bracket_count: usize,
@@ -54,6 +58,8 @@ impl<'a> Parser<'a> {
                 tree_cursor: stream.into_trees(),
                 stack: Vec::new(),
             },
+
+            paren_sep_is_semi: false,
 
             next_call_count: 0,
             break_last_token: 0,
@@ -261,6 +267,17 @@ impl<'a> Parser<'a> {
         ate
     }
 
+    pub(crate) fn eat_greater(&mut self) -> bool {
+        let ate = self.break_and_eat(TokenKind::Op(op::Greater));
+
+        if ate {
+            self.unmatched_angle_bracket_count =
+                self.unmatched_angle_bracket_count.saturating_sub(1);
+        }
+
+        ate
+    }
+
     pub(crate) fn consume_block(&mut self, delim: Delimiter, consume_close: ConsumeClosingDelim) {
         use TokenKind::*;
 
@@ -351,13 +368,43 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Build a diagnostic describing what the parser expected versus the
+    /// current token.
+    pub(crate) fn expected_tokens_error(&self, prefix: &str) -> Diagnostic<'a> {
+        let mut expected: Vec<String> = Vec::new();
+
+        for token in &self.expected_tokens {
+            let desc = match token {
+                ExpectTokenKind::Token(t) => format!("{t:?}"),
+                ExpectTokenKind::Keyword(k) => format!("`{k}`"),
+                ExpectTokenKind::Operator(o) => format!("`{o}`"),
+                ExpectTokenKind::Identifier => "an identifier".to_string(),
+                ExpectTokenKind::Path => "a path".to_string(),
+            };
+
+            if !expected.contains(&desc) {
+                expected.push(desc);
+            }
+        }
+
+        let found = format!("{:?}", self.token.kind);
+
+        let msg = if expected.is_empty() {
+            format!("{prefix} a valid token, found {found}")
+        } else {
+            format!("{prefix} {}, found {found}", expected.join(" or "))
+        };
+
+        self.diag_ctx().struct_span_error(self.token.span, msg)
+    }
+
     pub fn expect(&mut self, kind: &TokenKind) -> Result<Recovered, Diagnostic<'a>> {
         if self.expected_tokens.is_empty() {
             if self.token.kind == *kind {
                 self.next();
                 Ok(Recovered::No)
             } else {
-                unimplemented!()
+                Err(self.expected_tokens_error("expected"))
             }
         } else {
             self.expect_one_of(slice::from_ref(kind), &[])
@@ -375,7 +422,7 @@ impl<'a> Parser<'a> {
         } else if inedible.contains(&self.token.kind) {
             Ok(Recovered::No)
         } else {
-            unimplemented!()
+            Err(self.expected_tokens_error("expected one of"))
         }
     }
 
@@ -388,9 +435,9 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn expected_ident_found(
         &mut self,
-        recover: bool,
+        _recover: bool,
     ) -> ParseResult<'a, (Identifier, IdentIsRaw)> {
-        todo!()
+        Err(self.expected_tokens_error("expected an identifier, found"))
     }
 
     pub fn expect_keyword(&mut self, kw: Symbol) -> ParseResult<'a, ()> {
@@ -398,7 +445,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        todo!()
+        Err(self.expected_tokens_error("expected"))
     }
 
     pub fn expect_semi(&mut self) -> ParseResult<'a, ()> {
@@ -419,7 +466,10 @@ impl<'a> Parser<'a> {
         let (ident, is_raw) = self.ident_or_error(recover)?;
 
         if is_raw == IdentIsRaw::No && ident.is_reserved() {
-            todo!("error processing")
+            return Err(self.diag_ctx().struct_span_error(
+                self.token.span,
+                format!("`{}` is a reserved keyword", ident.as_str()),
+            ));
         }
 
         self.next();
@@ -447,6 +497,62 @@ impl<'a> Parser<'a> {
         f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
     ) -> ParseResult<'a, (ThinVec<T>, HasTrailing)> {
         self.parse_delim_comma_seq(Delimiter::Paren, f)
+    }
+
+    /// Parse a parenthesized field list whose items are separated by `,` or
+    /// `;` — one kind per list, mixing the two is an error. Returns the items,
+    /// whether the list had a trailing separator, and whether `;` was used.
+    pub fn parse_paren_sep_seq<T>(
+        &mut self,
+        mut f: impl FnMut(&mut Parser<'a>) -> ParseResult<'a, T>,
+    ) -> ParseResult<'a, (ThinVec<T>, HasTrailing, bool)> {
+        self.expect(&TokenKind::OpenDelim(Delimiter::Paren))?;
+
+        let mut items = ThinVec::new();
+        let mut trailing = HasTrailing::No;
+        let mut separator_is_semi: Option<bool> = None;
+
+        loop {
+            if self.eat(&TokenKind::CloseDelim(Delimiter::Paren)) {
+                break;
+            }
+            if self.token.kind == TokenKind::Eof {
+                break;
+            }
+
+            items.push(f(self)?);
+
+            if self.check(&TokenKind::CloseDelim(Delimiter::Paren)) {
+                trailing = HasTrailing::No;
+                continue;
+            }
+
+            let sep_span = self.token.span;
+
+            let this_is_semi = if self.eat(&TokenKind::Comma) {
+                false
+            } else if self.eat(&TokenKind::Semicolon) {
+                true
+            } else {
+                return Err(self
+                    .diag_ctx()
+                    .struct_span_error(sep_span, "expected `,` or `;` between list items"));
+            };
+
+            match separator_is_semi {
+                None => separator_is_semi = Some(this_is_semi),
+                Some(prev) if prev != this_is_semi => {
+                    return Err(self
+                        .diag_ctx()
+                        .struct_span_error(sep_span, "cannot mix `,` and `;` in one list"));
+                }
+                _ => {}
+            }
+
+            trailing = HasTrailing::Yes;
+        }
+
+        Ok((items, trailing, separator_is_semi.unwrap_or(false)))
     }
 
     pub fn parse_delim_comma_seq<T>(
@@ -528,8 +634,8 @@ impl<'a> Parser<'a> {
                             recovered = Recovered::Yes;
                             break;
                         }
-                        Err(mut err) => {
-                            unimplemented!()
+                        Err(err) => {
+                            return Err(err);
                         }
                     }
                 }

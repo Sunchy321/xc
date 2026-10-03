@@ -34,6 +34,10 @@ pub enum ExprKind {
     Nil,
     /// `this`
     This,
+    /// `self`
+    SelfExpr,
+    /// A macro call: `#name`, `#name(...)`.
+    MacroCall(Symbol, Option<crate::ast::DelimitedArgs>),
     /// `^`
     Caret,
     /// `$`
@@ -51,6 +55,8 @@ pub enum ExprKind {
     Lambda(P<Lambda>),
     /// `if cond { then } else { else }`
     If(P<Expr>, P<Expr>, Option<P<Expr>>),
+    /// `let pat = expr` — a binding condition in `if` / `while`.
+    Let(P<Pattern>, P<Expr>),
     /// `match expr { pat => body }`
     Match(P<Expr>, ThinVec<MatchArm>),
     /// `for pat in expr { body } else { else }`
@@ -131,6 +137,8 @@ impl ExprKind {
 
             Nil => ExprFlags::empty(),
             This => ExprFlags::empty(),
+            SelfExpr => ExprFlags::empty(),
+            MacroCall(..) => ExprFlags::empty(),
             Caret => ExprFlags::CONTAIN_BOUND_EXPR,
             Dollar => ExprFlags::CONTAIN_BOUND_EXPR,
             LambdaArgOrdinal(_) => ExprFlags::CONTAIN_LAMBDA_ARG,
@@ -149,6 +157,8 @@ impl ExprKind {
                     | then.flags
                     | else_.clone().map_or(ExprFlags::empty(), |e| e.flags)
             }
+
+            Let(_, expr) => expr.flags,
 
             Match(expr, arms) => {
                 expr.flags.difference(ExprFlags::CONTAIN_NIL_COALESCE)
@@ -243,7 +253,7 @@ impl ExprKind {
 #[derive(Clone, Debug)]
 pub struct MatchArm {
     pub pat: P<Pattern>,
-    pub guard: P<Expr>,
+    pub guard: Option<P<Expr>>,
     pub body: Option<P<Expr>>,
     pub span: Span,
 }

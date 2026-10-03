@@ -6,6 +6,7 @@ use xc_ast::func::{
 use xc_ast::module::{Constness, Safety};
 use xc_ast::ptr::P;
 use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
+use xc_ast::ty::{Type, TypeKind};
 use xc_ast::Mutability;
 use xc_span::symbol::{kw, op};
 use xc_span::{Identifier, Span};
@@ -16,11 +17,13 @@ use super::{ParseResult, SequenceSeparator};
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_func(&mut self, quals: ThinVec<Qual>, _lo: Span) -> ParseResult<'a, Func> {
-        self.expect_keyword(kw::Func)?;
+        // The `func` keyword is optional here: call sites such as `init`
+        // constructors and impl members dispatch before it is consumed.
+        self.eat_keyword(kw::Func);
 
         let ident = self.parse_func_name()?;
 
-        // TODO: Generic
+        let generics = self.parse_generic()?;
 
         let mut header = FuncHeader {
             safety: Safety::Default,
@@ -31,19 +34,62 @@ impl<'a> Parser<'a> {
             match qual.kind {
                 QualKind::Unsafe => header.safety = Safety::Unsafe(qual.span),
                 QualKind::Const => header.constness = Constness::Const(qual.span),
-                _ => todo!()
+                _ => {}
             }
         }
 
         let sig = self.parse_func_signature(header)?;
 
-        // TODO: require_body
-        let body = self.parse_func_body(false)?;
+        // A legacy `where` clause before the body is skipped.
+        if matches!(self.token.to_identifier(), Some((ident, _)) if ident.as_str() == "where") {
+            while !(self.check_noexpect(&TokenKind::OpenDelim(Delimiter::Brace))
+                || self.check_noexpect(&TokenKind::Semicolon)
+                || self.check_noexpect(&TokenKind::FatArrow)
+                || self.token.kind == TokenKind::Eof)
+            {
+                self.next();
+            }
+        }
 
-        Ok(Func { ident, sig, body })
+        let body = self.parse_func_body(true)?;
+
+        Ok(Func { ident, generics, sig, body })
     }
 
-    fn parse_func_name(&mut self) -> ParseResult<'a, Identifier> {
+    /// A parameter name: any single token that denotes an identifier,
+    /// including keywords used as names (`(or)`, `(if)`, `(then)`).
+    fn parse_param_name(&mut self) -> ParseResult<'a, Identifier> {
+        if let Some((ident, _)) = self.token.to_identifier() {
+            let span = self.token.span;
+            self.next();
+            return Ok(Identifier::new(ident.name, span));
+        }
+
+        self.parse_identifier()
+    }
+
+    fn parse_func_name(&mut self) -> ParseResult<'a, Identifier> {        if self.token.is_keyword(kw::Init) {
+            let span = self.token.span;
+            self.next();
+            return Ok(Identifier::new(kw::Init, span));
+        }
+
+        // Operator spellings that may be used as function names (`compl`, ...).
+        if let Some((ident, IdentIsRaw::No)) = self.token.to_identifier() {
+            if ident.name == kw::Compl
+                || ident.name == kw::Shl
+                || ident.name == kw::Shr
+                || ident.name == kw::Cmp
+                || ident.name == kw::And
+                || ident.name == kw::Or
+                || ident.name == kw::Xor
+            {
+                let span = self.token.span;
+                self.next();
+                return Ok(Identifier::new(ident.name, span));
+            }
+        }
+
         self.parse_identifier()
     }
 
@@ -59,7 +105,7 @@ impl<'a> Parser<'a> {
         let mut first_param = true;
 
         let (params, _) = self.parse_paren_comma_seq(|this| {
-            let result = this.parse_func_param(first_param).or_else(|err| todo!());
+            let result = this.parse_func_param(first_param);
 
             first_param = false;
 
@@ -69,7 +115,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parse_func_param(&mut self, first_param: bool) -> ParseResult<'a, FuncParam> {
+    fn parse_func_param(&mut self, _first_param: bool) -> ParseResult<'a, FuncParam> {
         let lo = self.token.span;
 
         let attrs = self.parse_outer_attrs()?;
@@ -78,10 +124,15 @@ impl<'a> Parser<'a> {
             if let Some(mut param) = this.parse_self_param()? {
                 param.attrs = attrs;
 
-                let res = if first_param { Ok(param) } else { todo!() }?;
-
-                return Ok((res, TrailingToken::None));
+                return Ok((param, TrailingToken::None));
             }
+
+            // Parameter qualifiers (`lazy`, `mut`, `ref`, `once`, ...).
+            while this.eat_keyword_noexpect(kw::Lazy)
+                || this.eat_keyword_noexpect(kw::Mut)
+                || this.eat_keyword_noexpect(kw::Ref)
+                || this.eat_keyword_noexpect(kw::Once)
+            {}
 
             let mut param = this.parse_func_param_normal(lo)?;
 
@@ -163,8 +214,64 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_func_param_normal(&mut self, lo: Span) -> ParseResult<'a, FuncParam> {
+        // A type-first variadic parameter: `T[]... values`.
+        {
+            let snapshot = self.create_snapshot();
+
+            if let Ok(ty) = self.parse_type()
+                && self.eat(&TokenKind::DotDotDot)
+                && let Some((ident, _)) = self.token.to_identifier()
+            {
+                self.next();
+
+                let span = lo.to(self.prev_token.span);
+
+                return Ok(FuncParam {
+                    attrs: thin_vec![],
+                    name: None,
+                    ident,
+                    ty,
+                    default: None,
+                    span,
+                });
+            }
+
+            self.restore_snapshot(snapshot);
+        }
+
+        // A parameter-list macro such as `#expandParameter(F::Parameter)`.
+        if self.check(&TokenKind::Pound) {
+            self.next();
+
+            let (ident, _) = self
+                .token
+                .to_identifier()
+                .ok_or_else(|| self.expected_tokens_error("expected a macro name"))?;
+            self.next();
+
+            if self.check(&TokenKind::OpenDelim(Delimiter::Paren))
+                || self.check(&TokenKind::OpenDelim(Delimiter::Bracket))
+            {
+                let _ = self.parse_token_tree();
+            }
+
+            let ty = P(Type {
+                kind: TypeKind::Named(ident.name),
+                span: lo.to(self.prev_token.span),
+            });
+
+            return Ok(FuncParam {
+                attrs: thin_vec![],
+                name: None,
+                ident,
+                ty,
+                default: None,
+                span: lo.to(self.prev_token.span),
+            });
+        }
+
         let (name_ident, param_ident) = if self.eat(&TokenKind::OpenDelim(Delimiter::Paren)) {
-            let name_ident = self.parse_identifier()?;
+            let name_ident = self.parse_param_name()?;
 
             self.expect(&TokenKind::CloseDelim(Delimiter::Paren))?;
 
@@ -175,15 +282,46 @@ impl<'a> Parser<'a> {
             };
 
             (Some(name_ident), param_ident)
+        } else if self.token.is_keyword(kw::Underscore) {
+            // `_: T` — a discarded parameter.
+            let span = self.token.span;
+            self.next();
+            (None, Identifier::new(kw::Underscore, span))
         } else {
-            let param_ident = self.parse_identifier()?;
+            let param_ident = self.parse_param_name()?;
 
-            (None, param_ident)
+            // `name ident: T` — a named parameter without parentheses.
+            if self.token.to_identifier().is_some() {
+                let ident = self.parse_param_name()?;
+                (Some(param_ident), ident)
+            } else {
+                (None, param_ident)
+            }
         };
 
-        self.expect(&TokenKind::Colon)?;
+        // `name: Type` or `name = default` (inferred type).
+        let (ty, default) = if self.eat(&TokenKind::Colon) {
+            let ty = self.parse_type()?;
 
-        let ty = self.parse_type()?;
+            let default = if self.eat_operator(op::Assign) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            (ty, default)
+        } else if self.eat_operator(op::Assign) {
+            let default = self.parse_expr()?;
+
+            let ty = P(Type {
+                kind: TypeKind::ImplicitThis,
+                span: lo.to(self.prev_token.span),
+            });
+
+            (ty, Some(default))
+        } else {
+            return Err(self.expected_tokens_error("expected `:` or `=`"));
+        };
 
         let span = lo.to(self.prev_token.span);
 
@@ -192,6 +330,7 @@ impl<'a> Parser<'a> {
             name: name_ident,
             ident: param_ident,
             ty,
+            default,
             span,
         })
     }
@@ -219,6 +358,7 @@ impl<'a> Parser<'a> {
             FuncThrow::None
         };
 
+        // `-> T`
         let ret = if self.eat(&TokenKind::RightArrow) {
             let ty = self.parse_type()?;
             FuncReturn::Type(ty)
@@ -229,14 +369,12 @@ impl<'a> Parser<'a> {
         Ok(FuncTail { throw, ret })
     }
 
-    pub(crate) fn parse_func_body(&mut self, require_body: bool) -> ParseResult<'a, FuncBody> {
-        let has_semi = if require_body {
-            self.token.kind == TokenKind::Semicolon
-        } else {
-            self.check(&TokenKind::Semicolon)
-        };
-
-        let body = if has_semi {
+    /// `in_decl` marks declaration contexts (function members and top-level
+    /// declarations), where `=> Expression ;` and bodyless declarations
+    /// require their trailing semicolon. Lambda expressions stay lenient: a
+    /// `;` after their body belongs to the enclosing statement.
+    pub(crate) fn parse_func_body(&mut self, in_decl: bool) -> ParseResult<'a, FuncBody> {
+        let body = if self.check(&TokenKind::Semicolon) {
             self.expect_semi()?;
             FuncBody::Semicolon
         } else if self.check(&TokenKind::OpenDelim(Delimiter::Brace)) {
@@ -244,13 +382,17 @@ impl<'a> Parser<'a> {
         } else if self.eat(&TokenKind::FatArrow) {
             let expr = self.parse_expr()?;
 
-            if !self.eat(&TokenKind::Semicolon) {
-                todo!()
+            if in_decl {
+                self.expect_semi()?;
+            } else {
+                self.eat(&TokenKind::Semicolon);
             }
 
             FuncBody::Arrow(expr)
+        } else if in_decl {
+            return Err(self.expected_tokens_error("expected"));
         } else {
-            todo!()
+            FuncBody::Semicolon
         };
 
         Ok(body)

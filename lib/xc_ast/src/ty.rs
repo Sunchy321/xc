@@ -30,8 +30,14 @@ pub enum TypeKind {
     DynType(P<Type>),
     Class(P<Type>),
 
-    /// Named type — an identifier reference like `Foo`
+    /// Named type — an identifier reference like `Foo`.
     Named(Symbol),
+    /// A named type with generic arguments: `Foo<Bar, Baz>`.
+    Generic(Symbol, ThinVec<P<Type>>),
+    /// A qualified projection: `<Base as Trait>::Assoc`.
+    Qualified(P<Type>, Symbol, Symbol),
+    /// A function type: `T -> U` (including the parenthesized parameter form).
+    Fn(P<Type>, P<Type>),
 
     ImplicitThis,
 }

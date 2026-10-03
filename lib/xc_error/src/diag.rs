@@ -89,7 +89,14 @@ impl<'a> Diagnostic<'a> {
     }
 
     pub fn emit(self) -> ErrorGuaranteed {
-        unimplemented!()
+        // The rendering pipeline is not built yet; report to stderr so the
+        // error is at least visible.
+        match self.messages.first() {
+            Some(DiagnosticMessage::String(msg)) => eprintln!("error: {msg}"),
+            _ => eprintln!("error"),
+        }
+
+        ErrorGuaranteed(())
     }
 }
 

@@ -10,7 +10,6 @@ define_symbols! {
 
         And: "and",
         AndEq: "and_eq",
-        Any: "any",
         As: "as",
         Async: "async",
         Await: "await",

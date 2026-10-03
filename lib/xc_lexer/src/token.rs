@@ -645,10 +645,18 @@ impl<'a> Cursor<'a> {
     fn eat_interplorations(&mut self) -> bool {
         debug_assert!(self.prev() == '(');
 
+        // Nested token scans reset the length counter in the same cursor;
+        // save and restore it around each call so the enclosing token's
+        // length stays correct.
+        let marker = self.len_marker();
+
         let mut depth = 1usize;
 
         loop {
             let t = self.next_token();
+
+            self.reset_to_marker(marker);
+
             match t {
                 Token {
                     kind: OpenParen, ..

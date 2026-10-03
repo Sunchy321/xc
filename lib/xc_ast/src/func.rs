@@ -3,6 +3,7 @@ use xc_span::{Identifier, Span};
 
 use crate::attr::Attribute;
 use crate::expr::Expr;
+use crate::generic::Generic;
 use crate::module::{Constness, Safety};
 use crate::ptr::P;
 use crate::stmt::Block;
@@ -12,6 +13,7 @@ use crate::Mutability;
 #[derive(Clone, Debug)]
 pub struct Func {
     pub ident: Identifier,
+    pub generics: Generic,
     pub sig: P<FuncSignature>,
     pub body: FuncBody,
 }
@@ -35,6 +37,7 @@ pub struct FuncParam {
     pub name: Option<Identifier>,
     pub ident: Identifier,
     pub ty: P<Type>,
+    pub default: Option<P<Expr>>,
     pub span: Span,
 }
 
@@ -104,6 +107,7 @@ impl FuncParam {
             ty,
             name: None,
             ident: this_key,
+            default: None,
             span,
         }
     }

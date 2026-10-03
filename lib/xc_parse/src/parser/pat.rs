@@ -28,6 +28,8 @@ impl<'a> Parser<'a> {
             self.parse_pattern_struct()?
         } else if self.eat_keyword(kw::Let) {
             return self.parse_pattern_let(lo);
+        } else if self.eat_keyword(kw::Some) {
+            PatternKind::Some(self.parse_pattern()?)
         } else {
             self.parse_pattern_primary()?
         };

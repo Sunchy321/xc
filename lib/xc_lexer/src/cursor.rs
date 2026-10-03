@@ -37,6 +37,17 @@ impl<'a> Cursor<'a> {
         self.rest = self.chars.as_str().len();
     }
 
+    /// The current length-counter marker, for re-entrant token scans
+    /// (string interpolation): save before, restore after each nested
+    /// `next_token`, which resets the counter in the same cursor.
+    pub(crate) fn len_marker(&self) -> usize {
+        self.rest
+    }
+
+    pub(crate) fn reset_to_marker(&mut self, marker: usize) {
+        self.rest = marker;
+    }
+
     pub fn peek(&self) -> char {
         self.chars.clone().next().unwrap_or(EOF)
     }

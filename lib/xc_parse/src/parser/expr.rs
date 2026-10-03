@@ -3,8 +3,9 @@ use std::vec;
 
 use itertools::Itertools;
 use thin_vec::{thin_vec, ThinVec};
+use xc_ast::ast::DelimitedArgs;
 use xc_ast::expr::{
-    Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, StructItem
+    Arguments, CastType, DictItem, Expr, ExprItem, ExprKind, ForLoopKind, MatchArm, StructItem
 };
 use xc_ast::decl::{Qual, QualKind};
 use xc_ast::func::{FuncBody, FuncParam, FuncReturn, FuncTail, FuncThrow};
@@ -12,14 +13,14 @@ use xc_ast::lambda::Lambda;
 use xc_ast::literal::{self, LiteralKind};
 use xc_ast::path::PathStyle;
 use xc_ast::ptr::P;
-use xc_ast::pattern::PatternKind;
+use xc_ast::pattern::{Pattern, PatternKind};
 use xc_ast::stmt::{Block, Catcher};
 use xc_ast::token::{Delimiter, IdentIsRaw, TokenKind};
-use xc_ast::tokenstream::Spacing;
-use xc_ast::ty::Type;
+use xc_ast::tokenstream::{Spacing, TokenTree};
+use xc_ast::ty::{Type, TypeKind};
 use xc_error::ErrorGuaranteed;
 use xc_span::symbol::{kw, op};
-use xc_span::{Span, Symbol};
+use xc_span::{Identifier, Span, Symbol};
 
 use crate::parser::op::{Associativity, OpInfo};
 use crate::parser::{HasTrailing, SequenceSeparator};
@@ -49,6 +50,37 @@ impl<'a> Parser<'a> {
     fn token_can_begin_expr(&self) -> bool {
         use TokenKind::*;
 
+        // Operator keywords are reserved identifiers, but they start or
+        // continue expressions (`x is T`, `some v`, `a in b`). `self` and
+        // `this` also begin expressions, and `#` begins a macro call.
+        if let Identifier(sym, IdentIsRaw::No) = self.token.kind
+            && (sym == kw::Is
+                || sym == kw::As
+                || sym == kw::In
+                || sym == kw::Cmp
+                || sym == kw::And
+                || sym == kw::Or
+                || sym == kw::Xor
+                || sym == kw::Shl
+                || sym == kw::Shr
+                || sym == kw::Compl
+                || sym == kw::Some
+                || sym == kw::SelfKeyword
+                || sym == kw::This
+                || sym == kw::Unsafe)
+        {
+            return true;
+        }
+
+        if self.token.kind == TokenKind::Pound {
+            return true;
+        }
+
+        // `_`, and builtin types as path prefixes (`string::from`).
+        if self.token.is_keyword(kw::Underscore) || self.token.to_builtin_type().is_some() {
+            return true;
+        }
+
         if !self.token.can_begin_expr() {
             false
         } else {
@@ -71,6 +103,33 @@ impl<'a> Parser<'a> {
         let flags = kind.expr_flags();
 
         P(Expr { kind, span, flags })
+    }
+
+    /// Build an expression pattern from a type, for `is` / `!is` operands
+    /// (`x is int`, `U is From<T>`).
+    fn pattern_from_type(&self, ty: P<Type>) -> P<Pattern> {
+        let span = ty.span;
+
+        let sym = match &ty.kind {
+            TypeKind::Named(sym) => *sym,
+            TypeKind::Generic(sym, _) => *sym,
+            _ => Symbol::intern("<type>"),
+        };
+
+        let path = xc_ast::path::Path {
+            segments: thin_vec![xc_ast::path::PathSegment::from_ident(Identifier::new(
+                sym, span
+            ))],
+            span,
+        };
+
+        let expr = self.make_expr(ExprKind::Path(path), span);
+
+        P(Pattern {
+            kind: PatternKind::Expr(expr),
+            assert: None,
+            span,
+        })
     }
 
     pub(crate) fn make_expr_err(&self, span: Span, guar: ErrorGuaranteed) -> P<Expr> {
@@ -123,7 +182,7 @@ impl<'a> Parser<'a> {
         let atoms = self.collect_expr_atoms()?;
 
         if atoms.is_empty() {
-            return Err(self.diag_ctx().create_error("unexpected token"));
+            return Err(self.diag_ctx().struct_span_error(self.token.span, "unexpected token"));
         }
 
         // 4. process continuous primary exprs
@@ -169,10 +228,18 @@ impl<'a> Parser<'a> {
                             FuncCall(Arguments::from_struct_items(t.clone()), thin_vec![])
                         }
                         ExprKind::Block(b) => FuncCallTrailing(b.clone()),
+                        ExprKind::Lambda(lambda) => match &lambda.body {
+                            FuncBody::Block(b) => FuncCallTrailing(b.clone()),
+                            _ => {
+                                return Err(self.diag_ctx().struct_span_error(self.token.span, 
+                                    "unexpected primary expr after another primary expr",
+                                ))
+                            }
+                        },
                         ExprKind::AnonEnumerator(symbol) => MemberAccess(*symbol),
 
                         _ => {
-                            return Err(self.diag_ctx().create_error(
+                            return Err(self.diag_ctx().struct_span_error(self.token.span, 
                                 "unexpected primary expr after another primary expr",
                             ))
                         }
@@ -264,7 +331,7 @@ impl<'a> Parser<'a> {
                             if i == 0 {
                                 // first operators must be prefix
                                 if ops.iter().any(|a| !a.can_be_prefix_op(self.op_ctx())) {
-                                    return Err(self.diag_ctx().create_error(
+                                    return Err(self.diag_ctx().struct_span_error(self.token.span, 
                                         "non-prefix operator occurs at start of expression",
                                     ));
                                 }
@@ -273,7 +340,7 @@ impl<'a> Parser<'a> {
                             } else if i == grouped_atoms_len - 1 {
                                 // last operators must be suffix
                                 if ops.iter().any(|a| !a.can_be_suffix_op(self.op_ctx())) {
-                                    return Err(self.diag_ctx().create_error(
+                                    return Err(self.diag_ctx().struct_span_error(self.token.span, 
                                         "non-suffix operator occurs at end of expression",
                                     ));
                                 }
@@ -292,11 +359,16 @@ impl<'a> Parser<'a> {
                                     .take_while(|a| a.can_be_prefix_op(self.op_ctx()))
                                     .count();
 
-                                if suffix_max_len + prefix_max_len + 1 < ops.len() {
+                                // A group consisting entirely of suffix operators
+                                // (e.g. a lone `.0` after a primary) binds to the
+                                // left operand and contains no infix operator.
+                                if suffix_max_len == len {
+                                    vec![ExprAtomGroup::SuffixOp(ops)]
+                                } else if suffix_max_len + prefix_max_len + 1 < ops.len() {
                                     return Err(self
                                         .diag_ctx()
                                         .create_error("cannot determine infix operator"));
-                                }
+                                } else {
 
                                 let mut possible_infix = vec![];
 
@@ -352,6 +424,7 @@ impl<'a> Parser<'a> {
                                     ExprAtomGroup::InfixOp(infix.0, infix.1),
                                     ExprAtomGroup::PrefixOp(prefixes),
                                 ]
+                                }
                             }
                         }
                     };
@@ -396,7 +469,7 @@ impl<'a> Parser<'a> {
 
                     ExprAtomGroup::SuffixOp(suffixes) => {
                         let expr = e.take().unwrap();
-                        let prefixes = p.take().unwrap();
+                        let prefixes = p.take().unwrap_or_default();
 
                         let suffix_expr = self.make_suffix_expr(expr, suffixes);
 
@@ -471,7 +544,35 @@ impl<'a> Parser<'a> {
                 .create_error("cannot mix operators without precedence with others"));
         }
 
-        let main_info = main_info.into_iter().next().unwrap();
+        let main_info = match main_info.into_iter().next() {
+            Some(info) => info,
+            None => {
+                // No infix operators: adjacent operands form call chains
+                // (e.g. a member chain followed by a trailing closure).
+                let mut exprs: Vec<P<Expr>> = grouped_atoms
+                    .into_iter()
+                    .filter_map(|g| match g {
+                        ExprAtomGroup::Expr(e) => Some(e),
+                        _ => None,
+                    })
+                    .collect();
+
+                let mut iter = exprs.drain(..);
+
+                let mut expr = match iter.next() {
+                    Some(e) => e,
+                    None => return Err(self.diag_ctx().struct_span_error(self.token.span, "empty expression")),
+                };
+
+                for arg in iter {
+                    let span = expr.span.to(arg.span);
+                    let args = Arguments::from_expr_list(thin_vec![arg]);
+                    expr = self.make_expr(ExprKind::FuncCall(expr, args, thin_vec![]), span);
+                }
+
+                return Ok(expr);
+            }
+        };
 
         enum ExprAtomGroupInner {
             Operator(Symbol, Span),
@@ -537,13 +638,13 @@ impl<'a> Parser<'a> {
         match main_info.assoc {
             Associativity::None => {
                 if operators.len() > 1 {
-                    return Err(self.diag_ctx().create_error("non-associative operators"));
+                    return Err(self.diag_ctx().struct_span_error(self.token.span, "non-associative operators"));
                 }
             }
 
             Associativity::Isolate => {
                 if operators.iter().any(|o| o.0 != operators[0].0) {
-                    return Err(self.diag_ctx().create_error("isolated operators"));
+                    return Err(self.diag_ctx().struct_span_error(self.token.span, "isolated operators"));
                 }
             }
 
@@ -738,6 +839,15 @@ impl<'a> Parser<'a> {
 
                 FuncCallTrailing(..) => unreachable!(),
 
+                Is(pattern, negated) => {
+                    let kind = if negated {
+                        ExprKind::NotIs(expr, pattern)
+                    } else {
+                        ExprKind::Is(expr, pattern)
+                    };
+                    expr = self.make_expr(kind, span);
+                }
+
                 MemberAccess(symbol) => {
                     expr = self.make_expr(ExprKind::MemberAccess(expr, symbol), span);
                 }
@@ -777,6 +887,7 @@ impl<'a> Parser<'a> {
                 MemberAccess(..) => unreachable!(),
                 MemberDynamicAccess(..) => unreachable!(),
                 Cast(..) => unreachable!(),
+                Is(..) => unreachable!(),
                 DotAwait => unreachable!(),
 
                 Op(op, _) => {
@@ -798,13 +909,131 @@ impl<'a> Parser<'a> {
             match self.stmt_expr_decision(&atoms) {
                 Some(StmtExprDecision::Stop) => break,
                 Some(StmtExprDecision::Error(msg)) => {
-                    return Err(self.diag_ctx().create_error(msg));
+                    return Err(self.diag_ctx().struct_span_error(self.token.span, msg));
                 }
                 Some(StmtExprDecision::Continue) | None => {}
             }
 
+            // A new operand that cannot continue the current expression ends
+            // it: `g() x` are two statements, and `let x = 0 for ...` ends
+            // the initializer before the `for`.
+            if atoms
+                .last()
+                .is_some_and(|p| p.can_be_primary_expr(self.op_ctx()))
+                && match self.token.kind {
+                    TokenKind::Identifier(sym, IdentIsRaw::No) => {
+                        !self.op_ctx().is_op(sym) && sym != kw::Is && sym != kw::As
+                    }
+                    TokenKind::Literal(..)
+                    | TokenKind::LambdaArgOrdinal(..)
+                    | TokenKind::LambdaArgNamed(..) => true,
+                    _ => false,
+                }
+            {
+                break;
+            }
+
+            // `Name { field: ... }` — braced construction was replaced by the
+            // parenthesized form. Outside trailing-block positions, a `{`
+            // followed by `field:` after a complete primary can only be this
+            // obsolete spelling.
+            if self.token.kind == TokenKind::OpenDelim(Delimiter::Brace)
+                && !self.restrictions.contains(Restrictions::NO_TRAILING_BLOCK)
+                && self.look_ahead(1, |t| t.is_identifier())
+                && self.look_ahead(2, |t| t.kind == TokenKind::Colon)
+                && atoms
+                    .last()
+                    .is_some_and(|p| p.can_be_primary_expr(self.op_ctx()))
+            {
+                return Err(self.diag_ctx().struct_span_error(
+                    self.token.span,
+                    "braced construction was replaced by the parenthesized form: `Name(field: value)`",
+                ));
+            }
+
+            // Keyword operators in operator position: `in`, `cmp`, `and`,
+            // `or`, `xor`, `shl`, `shr`, `compl`, `some`. In operand
+            // position they parse as plain identifiers instead.
+            if let TokenKind::Identifier(sym, IdentIsRaw::No) = self.token.kind
+                && self.op_ctx().is_op(sym)
+                && atoms
+                    .last()
+                    .is_some_and(|p| p.can_be_primary_expr(self.op_ctx()))
+            {
+                let span = self.token.span;
+                self.next();
+
+                atoms.push(self.make_expr_atom(
+                    ExprAtomKind::Op(sym, OpRole::Unspecified),
+                    span,
+                ));
+
+                continue;
+            }
+
+            // `Name<T>` type arguments in a call (`self<U>()`, `Vec<T, N>`):
+            // a balanced `<...>` followed by `(` is a call with generic
+            // arguments; anything else stays an ordinary comparison.
+            if self.token.kind == TokenKind::Op(op::Less)
+                && atoms
+                    .last()
+                    .is_some_and(|p| p.can_be_primary_expr(self.op_ctx()))
+            {
+                let snapshot = self.create_snapshot();
+
+                self.next();
+
+                let mut depth = 1usize;
+                let mut closed = false;
+
+                loop {
+                    match self.token.kind {
+                        TokenKind::Op(sym) if sym == op::Less => depth += 1,
+                        TokenKind::Op(sym) if sym == op::Greater => {
+                            depth -= 1;
+
+                            if depth == 0 {
+                                self.next();
+                                closed = true;
+                                break;
+                            }
+                        }
+                        TokenKind::Eof
+                        | TokenKind::Semicolon
+                        | TokenKind::OpenDelim(Delimiter::Brace)
+                        | TokenKind::CloseDelim(..) => break,
+                        _ => {}
+                    }
+
+                    self.next();
+                }
+
+                if closed && matches!(self.token.kind, TokenKind::OpenDelim(Delimiter::Paren)) {
+                    continue;
+                }
+
+                self.restore_snapshot(snapshot);
+            }
+
             match self.collect_expr_atom()? {
-                Some(atom) => atoms.push(atom),
+                Some(atom) => {
+                    // A leftmost `.member` is an anonymous enumerator rather
+                    // than a member access: `.Less`, `.B(0)`.
+                    let prev_primary = atoms
+                        .last()
+                        .is_some_and(|p| p.can_be_primary_expr(self.op_ctx()));
+
+                    if !prev_primary
+                        && let ExprAtomKind::MemberAccess(sym) = &atom.kind
+                    {
+                        let sym = *sym;
+                        let expr = self.make_expr(ExprKind::AnonEnumerator(sym), atom.span);
+                        atoms.push(ExprAtom::new_primary(expr));
+                        continue;
+                    }
+
+                    atoms.push(atom);
+                }
                 None => break,
             }
         }
@@ -843,6 +1072,13 @@ impl<'a> Parser<'a> {
     fn collect_expr_atom(&mut self) -> ParseResult<'a, Option<ExprAtom>> {
         use TokenKind::*;
 
+        // Inside an `if` constraint, `>` ends the condition.
+        if self.restrictions.contains(Restrictions::NO_GT)
+            && self.check_noexpect(&TokenKind::Op(op::Greater))
+        {
+            return Ok(None);
+        }
+
         let atom = if !self.token_can_begin_expr() {
             return Ok(None);
         } else {
@@ -863,6 +1099,110 @@ impl<'a> Parser<'a> {
             match self.token.kind {
                 OpenDelim(Delimiter::Invisible) => return Ok(None),
 
+                // A `::name` continuation of a path-like chain, including the
+                // turbofish form `::<T, U>::name`.
+                ColonColon => {
+                    let lo = self.token.span;
+                    self.next();
+
+                    if self.token.kind == Op(op::Less) {
+                        let mut depth = 0usize;
+
+                        loop {
+                            match self.token.kind {
+                                Op(sym) if sym == op::Less => depth += 1,
+                                Op(sym) if sym == op::Greater => {
+                                    depth -= 1;
+
+                                    if depth == 0 {
+                                        self.next();
+                                        break;
+                                    }
+                                }
+                                Eof => break,
+                                _ => {}
+                            }
+
+                            self.next();
+                        }
+
+                        self.eat(&TokenKind::ColonColon);
+                    }
+
+                    let (ident, _) = self
+                        .token
+                        .to_identifier()
+                        .ok_or_else(|| self.expected_tokens_error("expected"))?;
+                    self.next();
+
+                    let span = lo.to(self.prev_token.span);
+
+                    return Ok(Some(
+                        self.make_expr_atom(ExprAtomKind::MemberAccess(ident.name), span),
+                    ));
+                }
+
+                // `as` / `as?` / `as!` — a cast with a type operand.
+                Identifier(sym, IdentIsRaw::No) if sym == kw::As => {
+                    let lo = self.token.span;
+                    self.next();
+
+                    let cast_type = if self.eat_operator(op::Question) {
+                        CastType::Optional
+                    } else if self.eat_operator(op::Exclamation) {
+                        CastType::Forced
+                    } else {
+                        CastType::Normal
+                    };
+
+                    let ty = self.parse_type()?;
+                    let span = lo.to(self.prev_token.span);
+
+                    return Ok(Some(
+                        self.make_expr_atom(ExprAtomKind::Cast(ty, cast_type), span),
+                    ));
+                }
+
+                // `is` — a type test, with a type operand.
+                Identifier(sym, IdentIsRaw::No) if sym == kw::Is => {
+                    let lo = self.token.span;
+                    self.next();
+
+                    let ty = self.parse_type()?;
+                    let pattern = self.pattern_from_type(ty);
+                    let span = lo.to(self.prev_token.span);
+
+                    return Ok(Some(
+                        self.make_expr_atom(ExprAtomKind::Is(pattern, false), span),
+                    ));
+                }
+
+                // Operator keywords used as operands: prefix-capable ones
+                // (`some`, `compl`) stay operators; others (`or`, `and` as
+                // parameter names) parse as plain paths.
+                Identifier(sym, IdentIsRaw::No) if self.op_ctx().is_op(sym) => {
+                    let span = self.token.span;
+                    self.next();
+
+                    if self.op_ctx().is_prefix_op(sym) {
+                        return Ok(Some(self.make_expr_atom(
+                            ExprAtomKind::Op(sym, OpRole::Unspecified),
+                            span,
+                        )));
+                    }
+
+                    let path = xc_ast::path::Path {
+                        segments: thin_vec![xc_ast::path::PathSegment::from_ident(
+                            xc_span::Identifier::new(sym, span)
+                        )],
+                        span,
+                    };
+
+                    return Ok(Some(ExprAtom::new_primary(
+                        self.make_expr(ExprKind::Path(path), span),
+                    )));
+                }
+
                 Op(op) if op != op::Caret => {
                     if op == op::Dot {
                         self.next();
@@ -870,16 +1210,32 @@ impl<'a> Parser<'a> {
                     }
 
                     if !self.op_ctx().is_op(op) {
-                        return Err(self.diag_ctx().create_error("unknown operator"));
+                        return Err(self.diag_ctx().struct_span_error(self.token.span, "unknown operator"));
                     }
 
+                    // Spacing after this operator token, captured before the
+                    // advance (used to glue multi-token operators).
+                    let op_spacing = self.spacing;
+
                     self.next();
+
+                    // `&mut place` — a combined mutable-reference prefix.
+                    if op == op::Amp && self.token.is_keyword(kw::Mut) {
+                        let span = self.prev_token.span.to(self.token.span);
+                        self.next();
+
+                        let sym = Symbol::intern("&mut");
+
+                        return Ok(Some(
+                            self.make_expr_atom(ExprAtomKind::Op(sym, OpRole::Prefix), span),
+                        ));
+                    }
 
                     macro_rules! combine_op {
                         ($first_id:ident == $first:path, $second_id:ident == $second:path, $result:path) => {
                             if $first_id == $first
                                 && $second_id == $second
-                                && matches!(self.spacing, Spacing::Joint)
+                                && matches!(op_spacing, Spacing::Joint)
                             {
                                 let span = self.prev_token.span.to(self.token.span);
                                 self.next();
@@ -895,7 +1251,22 @@ impl<'a> Parser<'a> {
                     match (self.prev_token.kind.clone(), self.token.kind.clone()) {
                         (Op(first), Identifier(second, IdentIsRaw::No)) => {
                             combine_op!(first == op::Exclamation, second == kw::In, op::NotIn);
-                            combine_op!(first == op::Exclamation, second == kw::Is, op::NotIs);
+
+                            // `!is` — a negated type test.
+                            if first == op::Exclamation
+                                && second == kw::Is
+                                && matches!(op_spacing, Spacing::Joint)
+                            {
+                                let lo = self.prev_token.span;
+                                self.next();
+                                let ty = self.parse_type()?;
+                                let pattern = self.pattern_from_type(ty);
+                                let span = lo.to(self.prev_token.span);
+
+                                return Ok(Some(
+                                    self.make_expr_atom(ExprAtomKind::Is(pattern, true), span),
+                                ));
+                            }
                         }
 
                         (Identifier(first, IdentIsRaw::No), Op(second)) => {
@@ -908,6 +1279,21 @@ impl<'a> Parser<'a> {
                         }
 
                         _ => {}
+                    }
+
+                    // Postfix `++` / `--` (lexed as two Joint operator tokens).
+                    if (op == op::Plus || op == op::Minus)
+                        && matches!(self.token.kind, TokenKind::Op(sym) if sym == op)
+                        && matches!(op_spacing, Spacing::Joint)
+                    {
+                        let span = self.prev_token.span.to(self.token.span);
+                        self.next();
+
+                        let sym = Symbol::intern(if op == op::Plus { "++" } else { "--" });
+
+                        return Ok(Some(
+                            self.make_expr_atom(ExprAtomKind::Op(sym, OpRole::Suffix), span),
+                        ));
                     }
 
                     return Ok(Some(self.make_expr_atom(
@@ -1019,6 +1405,80 @@ impl<'a> Parser<'a> {
             let expr = self.make_expr(ExprKind::This, lo);
 
             Ok(expr)
+        } else if self.check_keyword(kw::SelfKeyword) && self.look_ahead(1, |t| matches!(t.kind, TokenKind::ColonColon)) {
+            // `self::X` — a path rooted at `self`.
+            self.parse_expr_path()
+        } else if self.check_keyword(kw::SelfKeyword) && !self.look_ahead(1, |t| matches!(t.kind, TokenKind::ColonColon)) {
+            self.next();
+
+            let expr = self.make_expr(ExprKind::SelfExpr, lo);
+
+            Ok(expr)
+        } else if self.eat(&TokenKind::Pound) {
+            // A macro call: `#name` or `#name(...)`.
+            let name = match self.token.to_identifier() {
+                Some((ident, _)) => {
+                    self.next();
+                    ident.name
+                }
+                None => return Err(self.expected_tokens_error("expected a macro name")),
+            };
+
+            let args = if self.check(&OpenDelim(Delimiter::Paren))
+                || self.check(&OpenDelim(Delimiter::Bracket))
+                || self.check(&OpenDelim(Delimiter::Brace))
+            {
+                let TokenTree::Delimited(tokens, delim, span, _) = self.parse_token_tree() else {
+                    unreachable!()
+                };
+
+                Some(DelimitedArgs {
+                    delim_span: span,
+                    delim,
+                    tokens,
+                })
+            } else {
+                None
+            };
+
+            let expr = self.make_expr(ExprKind::MacroCall(name, args), lo);
+
+            Ok(expr)
+        } else if self.token.to_builtin_type().is_some()
+            && self.look_ahead(1, |t| t.kind == TokenKind::ColonColon)
+        {
+            // `string::from`, `int::someMethod` — a builtin type as a path
+            // prefix.
+            let mut text = String::new();
+
+            let (ident, _) = self.token.to_identifier().unwrap();
+            text.push_str(ident.as_str());
+            self.next();
+
+            while self.check_noexpect(&TokenKind::ColonColon) {
+                self.next();
+
+                let (seg, _) = self
+                    .token
+                    .to_identifier()
+                    .ok_or_else(|| self.expected_tokens_error("expected"))?;
+
+                text.push_str("::");
+                text.push_str(seg.as_str());
+                self.next();
+            }
+
+            let sym = Symbol::intern(&text);
+            let span = lo.to(self.prev_token.span);
+
+            let path = xc_ast::path::Path {
+                segments: thin_vec![xc_ast::path::PathSegment::from_ident(
+                    xc_span::Identifier::new(sym, span)
+                )],
+                span,
+            };
+
+            Ok(self.make_expr(ExprKind::Path(path), span))
         } else if self.check_path() {
             self.parse_expr_path()
         } else if self.check(&OpenDelim(Delimiter::Paren)) {
@@ -1041,6 +1501,13 @@ impl<'a> Parser<'a> {
             self.parse_expr_for()
         } else if self.eat_keyword(kw::While) {
             self.parse_expr_while(self.prev_token.span)
+        } else if self.eat_keyword(kw::Unsafe) {
+            // `unsafe { ... }` — parsed as a block.
+            if self.check(&OpenDelim(Delimiter::Brace)) {
+                self.parse_expr_block()
+            } else {
+                Err(self.expected_tokens_error("expected `{`"))
+            }
         } else if self.eat_keyword(kw::Match) {
             self.parse_expr_match()
         } else if self.eat_keyword(kw::Return) {
@@ -1082,8 +1549,7 @@ impl<'a> Parser<'a> {
         ) {
             Ok(v) => v,
             Err(err) => {
-                let err = self.recover_from_seq_parse(Delimiter::Paren, lo, err);
-                return Ok(err);
+                return Err(err);
             }
         };
 
@@ -1261,6 +1727,23 @@ impl<'a> Parser<'a> {
 
         if if_expr {
             res |= Restrictions::THEN_IS_KEYWORD;
+        }
+
+        // `let pat = expr` — a binding condition.
+        if self.token.is_keyword(kw::Let) {
+            let lo = self.token.span;
+            self.next();
+
+            let pat = self.with_res(
+                Restrictions::PAT_IN_LET | Restrictions::NO_EQUAL,
+                |this| this.parse_pattern(),
+            )?;
+
+            self.expect(&TokenKind::Op(op::Assign))?;
+            let expr = self.parse_expr_res(res)?;
+
+            let span = lo.to(self.prev_token.span);
+            return Ok(self.make_expr(ExprKind::Let(pat, expr), span));
         }
 
         let cond = self.parse_expr_res(res).map_err(|mut err| {
@@ -1445,7 +1928,63 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_match(&mut self) -> ParseResult<'a, P<Expr>> {
-        unimplemented!()
+        let lo = self.prev_token.span;
+
+        let scrutinee = self.with_res(Restrictions::NO_TRAILING_BLOCK, |this| this.parse_expr())?;
+
+        self.expect(&TokenKind::OpenDelim(Delimiter::Brace))?;
+
+        let mut arms = ThinVec::new();
+
+        loop {
+            if self.eat(&TokenKind::CloseDelim(Delimiter::Brace)) {
+                break;
+            }
+            if self.token.kind == TokenKind::Eof {
+                break;
+            }
+
+            let arm_lo = self.token.span;
+
+            let pat = self.with_res(Restrictions::NO_TRAILING_BLOCK, |this| this.parse_pattern())?;
+
+            let guard = if self.eat_keyword(kw::If) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            if !self.eat(&TokenKind::FatArrow) {
+                return Err(self.expected_tokens_error("expected `=>`"));
+            }
+
+            let body = Some(self.parse_expr()?);
+
+            let span = arm_lo.to(self.prev_token.span);
+
+            arms.push(MatchArm {
+                pat,
+                guard,
+                body,
+                span,
+            });
+
+            // Arms are separated by `,`. The comma may be omitted when the
+            // arm body ends with a block, and the trailing comma before `}`
+            // is optional.
+            if !self.eat(&TokenKind::Comma)
+                && self.prev_token.kind != TokenKind::CloseDelim(Delimiter::Brace)
+                && !self.check(&TokenKind::CloseDelim(Delimiter::Brace))
+            {
+                return Err(self
+                    .diag_ctx()
+                    .struct_span_error(self.token.span, "expected `,` after match arm"));
+            }
+        }
+
+        let span = lo.to(self.prev_token.span);
+
+        Ok(self.make_expr(ExprKind::Match(scrutinee, arms), span))
     }
 
     fn parse_expr_opt(&mut self) -> ParseResult<'a, Option<P<Expr>>> {
@@ -1628,6 +2167,8 @@ pub enum ExprAtomKind {
     MemberAccess(Symbol),
     MemberDynamicAccess(P<Expr>),
     Cast(P<Type>, CastType),
+    /// A type test: `is Pattern` / `!is Pattern`.
+    Is(P<Pattern>, bool),
     DotAwait,
 
     Op(Symbol, OpRole),
@@ -1714,6 +2255,7 @@ impl ExprAtom {
             MemberAccess(..) => false,
             MemberDynamicAccess(..) => false,
             Cast(..) => false,
+            Is(..) => false,
             DotAwait => false,
 
             Op(..) => false,
@@ -1732,6 +2274,7 @@ impl ExprAtom {
             MemberAccess(..) => true,
             MemberDynamicAccess(..) => true,
             Cast(..) => true,
+            Is(..) => true,
             DotAwait => true,
 
             Op(sym, role) => match role {
@@ -1755,6 +2298,7 @@ impl ExprAtom {
             MemberAccess(..) => false,
             MemberDynamicAccess(..) => false,
             Cast(..) => false,
+            Is(..) => false,
             DotAwait => false,
 
             Op(sym, role) => match role {
@@ -1778,6 +2322,7 @@ impl ExprAtom {
             MemberAccess(..) => false,
             MemberDynamicAccess(..) => false,
             Cast(..) => false,
+            Is(..) => false,
             DotAwait => false,
 
             Op(sym, role) => match role {

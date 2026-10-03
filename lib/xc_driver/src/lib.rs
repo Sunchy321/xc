@@ -1,4 +1,4 @@
-use xc_check::{check, parse_program};
+use xc_check::{check, parse_file, parse_program};
 use xc_span::create_session_globals_then;
 use xc_span::source_map::Filename;
 use xvm::{compile, run};
@@ -32,8 +32,30 @@ pub fn main() -> ! {
                 std::process::exit(1);
             }
         }
+    } else if args.len() >= 3 && args[1] == "parse" {
+        let path = &args[2];
+        match std::fs::read_to_string(path) {
+            Ok(source) => {
+                match create_session_globals_then(|| {
+                    parse_file(Filename::Normal(path.clone()), &source)
+                }) {
+                    Ok(decls) => {
+                        println!("ok: {} declarations", decls.len());
+                        std::process::exit(0);
+                    }
+                    Err(err) => {
+                        eprintln!("{path}: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("error: cannot read {path}: {err}");
+                std::process::exit(1);
+            }
+        }
     } else {
-        eprintln!("usage: x run <file.x>");
+        eprintln!("usage: x run <file.x> | x parse <file.x>");
         std::process::exit(2);
     }
 }

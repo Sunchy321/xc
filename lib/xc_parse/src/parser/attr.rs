@@ -93,7 +93,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_token_tree(&mut self) -> TokenTree {
+    pub(crate) fn parse_token_tree(&mut self) -> TokenTree {
         match self.token.kind {
             TokenKind::OpenDelim(_) => {
                 let stream = self.token_cursor.tree_cursor.stream.clone();
