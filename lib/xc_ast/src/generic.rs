@@ -18,6 +18,22 @@ pub struct GenericParam {
     pub ident: Identifier,
     pub attrs: AttrVec,
     pub kind: GenericParamKind,
+    /// `T...` — a variadic (parameter pack) type parameter.
+    pub variadic: bool,
+    pub constraints: ThinVec<GenericConstraint>,
+}
+
+/// A constraint attached to a generic parameter.
+#[derive(Debug, Clone)]
+pub enum GenericConstraint {
+    /// `: type` — the parameter must be a type.
+    Kind(Span),
+    /// `: Type` — a subtype constraint.
+    Subtype(P<Type>),
+    /// `impl Type` — the parameter must implement the trait.
+    Impl(P<Type>),
+    /// `if Expression` — a conditional gate.
+    Condition(P<Expr>),
 }
 
 #[derive(Debug, Clone)]

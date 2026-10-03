@@ -36,6 +36,8 @@ bitflags::bitflags! {
         const PAT_IN_LET_MUT = 1 << 5;
         const NO_TRAILING_BLOCK = 1 << 6;
         const NO_EQUAL = 1 << 7;
+        /// `>` ends the expression (inside `if` constraints).
+        const NO_GT = 1 << 8;
     }
 }
 

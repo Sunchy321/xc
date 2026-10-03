@@ -61,16 +61,22 @@ impl<'a> Parser<'a> {
         let mut add_semi = false;
 
         match &mut stmt.kind {
-            StmtKind::Let(..) | StmtKind::ExprSemi(..) | StmtKind::Empty => {}
-            Expr(expr)
-                if expr.require_semi_to_be_stmt() &&
-                    // TODO: Expr::attr
-                    ![TokenKind::Eof, TokenKind::Semicolon, TokenKind::CloseDelim(Delimiter::Brace)].contains(&self.token.kind) =>
+            StmtKind::Let(..)
+                if !self.token.is_keyword(kw::Else)
+                    && !matches!(
+                        self.token.kind,
+                        TokenKind::Eof | TokenKind::CloseDelim(Delimiter::Brace)
+                    ) =>
             {
-                // Missing semicolon: accepted leniently; trailing `;` stays optional.
+                // The binding grammar ends with `;` (the `else` block form
+                // takes none).
+                self.expect_semi()?;
             }
 
+            StmtKind::Let(..) | StmtKind::ExprSemi(..) | StmtKind::Empty => {}
             Expr(expr) if self.token.kind != TokenKind::Eof && expr.require_semi_to_be_stmt() => {
+                // A non-block expression statement needs `;` (or to end the
+                // block as its tail expression); it is not optional.
                 let expect_result = self.expect_one_of(
                     &[],
                     &[
@@ -101,7 +107,16 @@ impl<'a> Parser<'a> {
 
         let stmt = if self.token.is_keyword(kw::Let) {
             self.next();
-            let pat = self.with_res(Restrictions::PAT_IN_LET | Restrictions::NO_EQUAL, |this| this.parse_pattern())?;
+
+            let mut restrictions = Restrictions::PAT_IN_LET | Restrictions::NO_EQUAL;
+
+            // `let mut x = ...`
+            if self.token.is_keyword(kw::Mut) {
+                self.next();
+                restrictions |= Restrictions::PAT_IN_LET_MUT;
+            }
+
+            let pat = self.with_res(restrictions, |this| this.parse_pattern())?;
             let init = if self.eat(&TokenKind::Op(op::Assign)) {
                 Some(self.parse_expr()?)
             } else {
@@ -109,8 +124,11 @@ impl<'a> Parser<'a> {
             };
             let span = lo.to(self.prev_token.span);
             self.make_stmt(StmtKind::Let(pat, init), span)
-        } else if self.eat(&TokenKind::Semicolon) {
-            self.make_stmt(StmtKind::Empty, lo)
+        } else if self.check(&TokenKind::Semicolon) {
+            // The grammar has no empty statement: a stray `;` is an error.
+            return Err(self
+                .diag_ctx()
+                .struct_span_error(self.token.span, "unexpected `;`"));
         } else if self.token.kind != TokenKind::CloseDelim(Delimiter::Brace) {
             // expr stmt
             let expr = self.parse_expr_res(Restrictions::STMT_EXPR)?;

@@ -76,10 +76,11 @@ fn check_block(b: &Block, program: &Program) -> Result<(), String> {
 fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
     use ExprKind::*;
     match &e.kind {
-        Placeholder | This | Caret | Dollar | LambdaArgOrdinal(_) | LambdaArgNamed(_)
-        | AnonEnumerator(_) | Struct(_) | Dict(_) | Lambda(_) | Match(..) | Try(..)
-        | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..) | MemberDynamicAccess(..)
-        | MethodCall(..) | Subscript(..) | Cast(..) | Await(..) => {
+        Placeholder | This | SelfExpr | MacroCall(..) | Caret | Dollar | LambdaArgOrdinal(_)
+        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Dict(_) | Lambda(_) | Match(..)
+        | Try(..) | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
+        | MemberDynamicAccess(..) | MethodCall(..) | Subscript(..) | Cast(..) | Await(..)
+        | Let(..) => {
             Err(format!("unsupported expression in this build: {e:?}"))
         }
         Literal(_) | Nil | Path(_) => Ok(()),

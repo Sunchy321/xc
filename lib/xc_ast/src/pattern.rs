@@ -12,6 +12,8 @@ pub enum PatternKind {
     Wildcard,
     Expr(P<Expr>),
     Bind(Identifier, Mutability),
+    /// `some Pattern`
+    Some(P<Pattern>),
     Array(ThinVec<ArrayPatternItem>),
     Struct(ThinVec<StructPatternItem>),
 }

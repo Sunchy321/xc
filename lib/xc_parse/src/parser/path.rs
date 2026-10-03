@@ -1,6 +1,8 @@
 use thin_vec::ThinVec;
 use xc_ast::token::TokenKind;
 use xc_ast::path::{Path, PathSegment, PathStyle};
+use xc_span::symbol::kw;
+use xc_span::Identifier;
 
 use super::{parser::Parser, ParseResult};
 
@@ -42,6 +44,13 @@ impl<'a> Parser<'a> {
         &mut self,
         style: PathStyle
     ) -> ParseResult<'a, PathSegment> {
+        // `self::X` — `self` as a path prefix.
+        if self.token.is_keyword(kw::SelfKeyword) {
+            let span = self.token.span;
+            self.next();
+            return Ok(PathSegment::from_ident(Identifier::new(kw::SelfKeyword, span)));
+        }
+
         let ident = self.parse_identifier()?;
 
         Ok(PathSegment::from_ident(ident))

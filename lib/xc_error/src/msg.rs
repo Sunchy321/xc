@@ -23,6 +23,12 @@ impl From<String> for DiagnosticMessage {
     }
 }
 
+impl From<&'static str> for DiagnosticMessage {
+    fn from(s: &'static str) -> Self {
+        Self::String(Cow::Borrowed(s))
+    }
+}
+
 pub enum SubDiagnosticMessage {
     String(Cow<'static, str>),
 }

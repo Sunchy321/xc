@@ -14,7 +14,15 @@ pub struct OpContext {
 impl OpContext {
     /// create operator context with builtin operators
     pub fn new() -> OpContext {
-        let prefixes = vec![op::Plus, op::Minus, kw::Compl, kw::Some];
+        let prefixes = vec![
+            op::Plus,
+            op::Minus,
+            op::Multiply,
+            op::Amp,
+            op::Exclamation,
+            kw::Compl,
+            kw::Some,
+        ];
         let suffixes = vec![op::Question, op::Exclamation];
 
         let mut map = HashMap::new();
