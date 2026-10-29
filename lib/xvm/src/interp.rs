@@ -10,6 +10,20 @@ use xvalue::{write_value, Heap, ObjKind, Value};
 use crate::isa::Opcode;
 use crate::lower::Module;
 
+#[derive(Clone, Copy, PartialEq)]
+enum Walk {
+    /// 正常执行。
+    None,
+    /// cleanup 完成后恢复到该 ip（ENDSCOPE 的落点）。
+    Resume(u32),
+    ///RET 走栈：完成后按约定传播 ret_val + er。
+    Ret,
+    /// RAISE 走栈：完成后仅传播 er。
+    Raise,
+    /// PANIC 走栈：完成后继续向调用帧展开。
+    Panic,
+}
+
 struct Frame {
     func: u32,
     ip: u32,
@@ -18,11 +32,42 @@ struct Frame {
     restore: usize,
     /// 闭包捕获环境（槽 = cell 对象）；非闭包帧为空。
     env: Vec<Value>,
+    /// 错误寄存器 er（Nil = 成功）；被调返回时写回调用帧（约定 A）。
+    err: Value,
+    /// defer 清理体的入口 ip，内层在后。
+    defers: Vec<u32>,
+    /// defer 作用域标记（defers 的长度快照，ENDSCOPE 用）。
+    marks: Vec<usize>,
+    walk: Walk,
+    walk_remaining: usize,
+    /// RET 走栈期间暂存的返回值（cleanup 不得破坏）及其落点槽位。
+    ret_val: Value,
+    ret_slot: usize,
+}
+
+impl Frame {
+    fn new(func: u32, ip: u32, base: u32, restore: usize, env: Vec<Value>) -> Self {
+        Frame {
+            func,
+            ip,
+            base,
+            restore,
+            env,
+            err: Value::Nil,
+            defers: Vec::new(),
+            marks: vec![0],
+            walk: Walk::None,
+            walk_remaining: 0,
+            ret_val: Value::Nil,
+            ret_slot: 0,
+        }
+    }
 }
 
 pub fn run(module: &Module, source: &str) -> Result<String, String> {
     let mut heap = Heap::new();
     heap.set_gc_stress(std::env::var("XVM_GC_EVERY_ALLOC").is_ok());
+    let gc_stress = std::env::var("XVM_GC_EVERY_ALLOC").is_ok();
     let mut slots = vec![Value::Void; module.num_slots];
     // cell 化槽位：加载期建 cell，此后 GETSLOT/SETSLOT 透明穿透。
     for (idx, marked) in module.cell_slots.iter().enumerate() {
@@ -34,14 +79,9 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
     // 帧窗口的底座：调用约定为「实参占被调帧前导寄存器」。
     let top_regs = module.funcs[0].regs as usize;
     let mut stack: Vec<Value> = vec![Value::Nil; top_regs];
-    let mut frames: Vec<Frame> = vec![Frame {
-        func: 0,
-        ip: 0,
-        base: 0,
-        restore: top_regs,
-        env: Vec::new(),
-    }];
+    let mut frames: Vec<Frame> = vec![Frame::new(0, 0, 0, top_regs, Vec::new())];
     let mut out = String::new();
+    let mut panic_payload: Option<Value> = None;
 
     // 分配 safepoint：栈、槽表、各帧捕获环境都是精确根集。在分配型指令的
     // 操作数尚在寄存器（栈槽）时调用——GC 只回收不可达对象，不影响执行。
@@ -50,6 +90,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
         stack: &[Value],
         slots: &[Value],
         frames: &[Frame],
+        extra: &[Value],
     ) {
         if !heap.should_collect() {
             return;
@@ -58,6 +99,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
         for f in frames {
             roots.push(&f.env);
         }
+        roots.push(extra);
         let (freed, kept) = heap.collect(&roots);
         if std::env::var("XVM_TRACE_GC").is_ok() {
             eprintln!("gc: freed {freed}, kept {kept}");
@@ -175,7 +217,14 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::Concat => {
-                maybe_gc(&mut heap, &stack, &slots, &frames);
+                let gc_extra: Vec<Value> = {
+                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
+                    if let Some(p) = &panic_payload {
+                        v.push(*p);
+                    }
+                    v
+                };
+                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
                 let (dst, l, r) = (
                     base + instr.a() as usize,
                     stack[base + instr.b() as usize],
@@ -233,7 +282,14 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::NewArr => {
-                maybe_gc(&mut heap, &stack, &slots, &frames);
+                let gc_extra: Vec<Value> = {
+                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
+                    if let Some(p) = &panic_payload {
+                        v.push(*p);
+                    }
+                    v
+                };
+                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
                 let (dst, base_i, count) = (instr.a() as usize, instr.b() as usize, instr.c() as usize);
                 let elems = stack[base + base_i..base + base_i + count].to_vec();
                 let o = heap.alloc(ObjKind::Arr(elems));
@@ -310,13 +366,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 if stack.len() < need {
                     stack.resize(need, Value::Nil);
                 }
-                frames.push(Frame {
-                    func: instr.b(),
-                    ip: 0,
-                    base: base_new as u32,
-                    restore: need,
-                    env: Vec::new(),
-                });
+                frames.push(Frame::new(instr.b(), 0, base_new as u32, need, Vec::new()));
             }
             Opcode::CallNat => {
                 let n = instr.c() as usize;
@@ -337,19 +387,180 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[start] = Value::Void;
             }
             Opcode::Ret => {
-                // 约定：返回值在被调者 r0，其槽位即调用者的 A 寄存器——
-                // 恢复栈长后值已在原位，无需移动。
-                frames.pop();
-                if frames.is_empty() {
-                    return Ok(out);
+                let ret = stack[base + instr.a() as usize];
+                let f = frames.last_mut().unwrap();
+                if !f.defers.is_empty() {
+                    // 先走 defer 清理链：返回值暂存，走完再传播（约定 D）。
+                    f.ret_val = ret;
+                    f.ret_slot = base + instr.a() as usize;
+                    f.walk = Walk::Ret;
+                    f.walk_remaining = f.defers.len();
+                    f.ip = *f.defers.last().unwrap();
+                } else {
+                    // 返回值在被调者 r0，槽位即调用者的 A 寄存器——原位无需移动。
+                    let f_err = f.err;
+                    frames.pop();
+                    if frames.is_empty() {
+                        if f_err != Value::Nil {
+                            return Err(uncaught_message(&f_err));
+                        }
+                        return Ok(out);
+                    }
+                    let restore = frames.last().unwrap().restore;
+                    if stack.len() > restore {
+                        stack.truncate(restore);
+                    }
+                    frames.last_mut().unwrap().err = f_err;
                 }
-                let restore = frames.last().unwrap().restore;
-                if stack.len() > restore {
-                    stack.truncate(restore);
+            }
+            Opcode::Raise => {
+                // throw：er ← 值；defer 走栈后仅传播 er（无返回值）。
+                let f = frames.last_mut().unwrap();
+                f.err = stack[base + instr.a() as usize];
+                if !f.defers.is_empty() {
+                    f.walk = Walk::Raise;
+                    f.walk_remaining = f.defers.len();
+                    f.ip = *f.defers.last().unwrap();
+                } else {
+                    let f_err = f.err;
+                    frames.pop();
+                    if frames.is_empty() {
+                        return Err(uncaught_message(&f_err));
+                    }
+                    let restore = frames.last().unwrap().restore;
+                    if stack.len() > restore {
+                        stack.truncate(restore);
+                    }
+                    frames.last_mut().unwrap().err = f_err;
+                }
+            }
+            Opcode::RetErr => {
+                let f = frames.last_mut().unwrap();
+                if f.err != Value::Nil && !f.defers.is_empty() {
+                    f.walk = Walk::Raise;
+                    f.walk_remaining = f.defers.len();
+                    f.ip = *f.defers.last().unwrap();
+                } else if f.err != Value::Nil {
+                    let f_err = f.err;
+                    frames.pop();
+                    if frames.is_empty() {
+                        return Err(uncaught_message(&f_err));
+                    }
+                    let restore = frames.last().unwrap().restore;
+                    if stack.len() > restore {
+                        stack.truncate(restore);
+                    }
+                    frames.last_mut().unwrap().err = f_err;
+                }
+            }
+            Opcode::JmpErr => {
+                let f = frames.last_mut().unwrap();
+                if f.err != Value::Nil {
+                    stack[base + instr.a() as usize] = f.err;
+                    f.err = Value::Nil;
+                    f.ip = (ip as i64 + 1 + instr.sbx() as i64) as u32;
+                }
+            }
+            Opcode::Panic => {
+                let payload = stack[base + instr.a() as usize];
+                if panic_payload.is_some() {
+                    return Err("panic during panic".to_string());
+                }
+                panic_payload = Some(payload);
+                let f = frames.last_mut().unwrap();
+                if !f.defers.is_empty() {
+                    f.walk = Walk::Panic;
+                    f.walk_remaining = f.defers.len();
+                    f.ip = *f.defers.last().unwrap();
+                } else if run_continue_panic(&mut frames, &panic_payload, &mut out) {
+                    return Err(panic_message(&panic_payload));
+                }
+            }
+            Opcode::Defer => {
+                frames
+                    .last_mut()
+                    .unwrap()
+                    .defers
+                    .push(instr.bx() as u32);
+            }
+            Opcode::EndDefer => {
+                // 清理体完成：弹出其记录（未弹出的留在栈上供链式进入）。
+                frames.last_mut().unwrap().defers.pop();
+                let (walk, remaining, err, ret, ret_slot) = {
+                    let f = frames.last().unwrap();
+                    (f.walk, f.walk_remaining, f.err, f.ret_val, f.ret_slot)
+                };
+                match walk {
+                    Walk::Resume(target) => {
+                        let f = frames.last_mut().unwrap();
+                        f.ip = target;
+                        f.walk = Walk::None;
+                    }
+                    Walk::Ret | Walk::Raise => {
+                        let remaining = remaining - 1;
+                        if remaining > 0 {
+                            let f = frames.last_mut().unwrap();
+                            let next = *f.defers.last().unwrap();
+                            f.ip = next;
+                        } else {
+                            let is_ret = walk == Walk::Ret;
+                            frames.pop();
+                            if frames.is_empty() {
+                                if err != Value::Nil {
+                                    return Err(uncaught_message(&err));
+                                }
+                                return Ok(out);
+                            }
+                            let restore = frames.last().unwrap().restore;
+                            if stack.len() > restore {
+                                stack.truncate(restore);
+                            }
+                            frames.last_mut().unwrap().err = err;
+                            if is_ret {
+                                if ret_slot < stack.len() {
+                                    stack[ret_slot] = ret;
+                                } else {
+                                    stack.push(ret);
+                                }
+                            }
+                        }
+                    }
+                    Walk::Panic => {
+                        let remaining = remaining - 1;
+                        if remaining > 0 {
+                            let f = frames.last_mut().unwrap();
+                            let next = *f.defers.last().unwrap();
+                            f.ip = next;
+                        } else if run_continue_panic(&mut frames, &panic_payload, &mut out) {
+                            return Err(panic_message(&panic_payload));
+                        }
+                    }
+                    Walk::None => rt!("internal: ENDDEFER outside a defer walk"),
+                }
+            }
+            Opcode::Mark => {
+                let n = frames.last().unwrap().defers.len();
+                frames.last_mut().unwrap().marks.push(n);
+            }
+            Opcode::EndScope => {
+                let f = frames.last_mut().unwrap();
+                let marker = f.marks.pop().unwrap_or(0);
+                let remaining = f.defers.len().saturating_sub(marker);
+                if remaining > 0 {
+                    f.walk = Walk::Resume(ip as u32 + 1);
+                    f.walk_remaining = remaining;
+                    f.ip = *f.defers.last().unwrap();
                 }
             }
             Opcode::AllocCell => {
-                maybe_gc(&mut heap, &stack, &slots, &frames);
+                let gc_extra: Vec<Value> = {
+                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
+                    if let Some(p) = &panic_payload {
+                        v.push(*p);
+                    }
+                    v
+                };
+                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
                 let v = stack[base + instr.b() as usize];
                 let o = heap.alloc(ObjKind::Cell(v));
                 stack[base + instr.a() as usize] = Value::Obj(o);
@@ -380,7 +591,14 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = stack[base + instr.b() as usize];
             }
             Opcode::RefElem => {
-                maybe_gc(&mut heap, &stack, &slots, &frames);
+                let gc_extra: Vec<Value> = {
+                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
+                    if let Some(p) = &panic_payload {
+                        v.push(*p);
+                    }
+                    v
+                };
+                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
                 let (arr, idx) = (
                     stack[base + instr.b() as usize],
                     stack[base + instr.c() as usize],
@@ -422,7 +640,14 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = Value::Obj(o);
             }
             Opcode::Closure => {
-                maybe_gc(&mut heap, &stack, &slots, &frames);
+                let gc_extra: Vec<Value> = {
+                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
+                    if let Some(p) = &panic_payload {
+                        v.push(*p);
+                    }
+                    v
+                };
+                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
                 // 捕获描述伪指令紧随其后（CapRef/CapUp 序列），一并消费。
                 let frame_env = frames.last().unwrap().env.clone();
                 let mut caps = 0usize;
@@ -518,13 +743,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 if stack.len() < need {
                     stack.resize(need, Value::Nil);
                 }
-                frames.push(Frame {
-                    func: fidx,
-                    ip: 0,
-                    base: base_new as u32,
-                    restore: need,
-                    env,
-                });
+                frames.push(Frame::new(fidx, 0, base_new as u32, need, env));
             }
         }
     }
@@ -583,6 +802,41 @@ fn store_ref(r: Value, v: Value) -> Result<(), String> {
         },
         _ => Err("store through a non-reference value".to_string()),
     }
+}
+
+/// PANIC 展开的「弹到下一个带 defer 的帧」步进。返回 true = 已无帧（进程失败）。
+fn run_continue_panic(frames: &mut Vec<Frame>, payload: &Option<Value>, out: &mut String) -> bool {
+    loop {
+        frames.pop();
+        match frames.last_mut() {
+            None => return true,
+            Some(c) if !c.defers.is_empty() => {
+                c.walk = Walk::Panic;
+                c.walk_remaining = c.defers.len();
+                c.ip = *c.defers.last().unwrap();
+                let _ = out;
+                return false;
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+fn panic_message(payload: &Option<Value>) -> String {
+    match payload {
+        Some(p) => {
+            let mut s = String::new();
+            let _ = write_value(p, &mut s);
+            format!("panic: {s}")
+        }
+        None => "panic".to_string(),
+    }
+}
+
+fn uncaught_message(err: &Value) -> String {
+    let mut s = String::new();
+    let _ = write_value(err, &mut s);
+    format!("uncaught throw: {s}")
 }
 
 fn rt_err(name: &str, source: &str, pos: u32, msg: impl std::fmt::Display) -> String {

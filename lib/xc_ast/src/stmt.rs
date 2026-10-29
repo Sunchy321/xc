@@ -10,6 +10,8 @@ pub enum StmtKind {
     Expr(P<Expr>),
     ExprSemi(P<Expr>),
     Let(P<Pattern>, Option<P<Expr>>),
+    /// `defer Block`：块退出（正常返回 / 错误传播 / panic 展开）时执行。
+    Defer(Block),
     Empty
 }
 
@@ -18,10 +20,19 @@ impl StmtKind {
         match self {
             StmtKind::Expr(expr) => expr.flags,
             StmtKind::ExprSemi(expr) => expr.flags,
+            StmtKind::Defer(b) => b.expr_flags(),
             StmtKind::Let(_, init) => init.as_ref().map_or(ExprFlags::empty(), |e| e.flags),
             StmtKind::Empty => ExprFlags::empty(),
         }
     }
+}
+
+/// 块内直接声明的 `defer` 语句数（不深入嵌套块；嵌套块自带标记）。
+pub fn direct_defer_count(stmts: &[Stmt]) -> usize {
+    stmts
+        .iter()
+        .filter(|s| matches!(s.kind, StmtKind::Defer(..)))
+        .count()
 }
 
 #[derive(Clone, Debug)]

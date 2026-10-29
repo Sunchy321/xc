@@ -77,6 +77,26 @@ pub fn verify(m: &Module) -> Result<(), String> {
                         return bad("register out of range".to_string());
                     }
                 }
+                Opcode::Raise | Opcode::Panic => {
+                    if !reg(instr.a()) {
+                        return bad("register out of range".to_string());
+                    }
+                }
+                Opcode::RetErr | Opcode::EndDefer | Opcode::Mark | Opcode::EndScope => {}
+                Opcode::JmpErr => {
+                    if !reg(instr.a()) {
+                        return bad("register out of range".to_string());
+                    }
+                    let target = ip as i64 + 1 + instr.sbx() as i64;
+                    if target < 0 || target as usize > f.code.len() {
+                        return bad("jump target out of range".to_string());
+                    }
+                }
+                Opcode::Defer => {
+                    if instr.bx() as usize >= f.code.len() {
+                        return bad("defer cleanup ip out of range".to_string());
+                    }
+                }
                 Opcode::LoadI | Opcode::LoadK | Opcode::GetSlot | Opcode::GetSlotCell => {
                     if !reg(instr.a()) {
                         return bad("register out of range".to_string());

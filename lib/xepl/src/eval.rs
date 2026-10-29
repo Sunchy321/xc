@@ -282,6 +282,7 @@ fn pattern_matches(pat: &xc_ast::pattern::Pattern, _value: &Value) -> bool {
 fn eval_inner_stmt(stmt: &xc_ast::stmt::Stmt, store: &mut Store) -> Result<Value, ControlFlow> {
     match &stmt.kind {
         StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => eval_inner(expr, store),
+        StmtKind::Defer(_) => Ok(Value::Void),
         StmtKind::Let(pat, init) => {
             let value = match init {
                 Some(expr) => eval_inner(expr, store)?,
@@ -326,7 +327,7 @@ fn eval_block(block: &Block, store: &mut Store) -> Result<Value, ControlFlow> {
     let mut last = Value::Void;
     for stmt in block.stmts.iter() {
         match &stmt.kind {
-            StmtKind::Empty => {}
+            StmtKind::Empty | StmtKind::Defer(_) => {}
             StmtKind::Expr(expr) | StmtKind::ExprSemi(expr) => {
                 last = eval_inner(expr, store)?;
             }

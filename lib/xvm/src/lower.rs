@@ -159,8 +159,21 @@ struct FnState {
     /// 帧大小 = 寄存器号的历史高水位（next_reg 会被语句边界重置，不能用它）。
     regs_watermark: u32,
     loop_stack: Vec<LoopInfo>,
+    /// 打开的 try 区域：捕获落地寄存器 + 待回填的 JMPERR/JMP 补丁。
+    try_stack: Vec<TryFrame>,
+    /// 当前打开的 defer 作用域数；throw/break/continue 跨越时先发 ENDSCOPE。
+    defer_depth: u32,
+    /// 处于 defer 清理体内：return/throw/break/continue/嵌套 defer 拒绝（M3）。
+    in_defer: bool,
     /// 当前顶层语句序号；函数体为 u32::MAX（全局引用不做 use-before-let 检查）。
     cur_seq: u32,
+}
+
+struct TryFrame {
+    /// 错误值的落地寄存器（JMPERR A 与 throw 的 MOVE 目标一致）。
+    rd: u32,
+    /// 待回填到 catch 入口的跳转（JMPERR 与同帧 throw 的 Jmp）。
+    patches: Vec<usize>,
 }
 
 impl FnState {
@@ -176,6 +189,9 @@ impl FnState {
             temp_base: 0,
             regs_watermark: 0,
             loop_stack: Vec::new(),
+            try_stack: Vec::new(),
+            defer_depth: 0,
+            in_defer: false,
             cur_seq: u32::MAX,
         }
     }
@@ -556,6 +572,28 @@ impl<'p> Lower<'p> {
                 self.emit(st, Instr::abx(Opcode::LoadNil, r, 0), pos); // let 语句值为 void
                 Ok(Some(r))
             }
+            StmtKind::Defer(block) => {
+                // cleanup 体就地布局：DEFER；JMP skip；body；ENDDEFER；skip:
+                if st.in_defer {
+                    return Err("defer inside defer is not supported yet".to_string());
+                }
+                let d_idx = st.code.len();
+                self.emit(st, Instr::abx(Opcode::Defer, 0, 0), pos);
+                let j_skip = self.emit_jump(st, Opcode::Jmp, 0, pos);
+                let cleanup_ip = st.code.len();
+                st.code[d_idx] = Instr::abx(Opcode::Defer, 0, cleanup_ip as u16);
+                let saved_depth = st.defer_depth;
+                let saved_in_defer = st.in_defer;
+                st.in_defer = true;
+                self.compile_block(st, block, false)?;
+                st.in_defer = saved_in_defer;
+                st.defer_depth = saved_depth;
+                self.emit(st, Instr::new(Opcode::EndDefer), pos);
+                self.patch(st, j_skip);
+                let r = self.temp(st)?;
+                self.emit(st, Instr::abx(Opcode::LoadNil, r, 0), pos);
+                Ok(Some(r))
+            }
         }
     }
 
@@ -567,7 +605,17 @@ impl<'p> Lower<'p> {
         block: &Block,
         is_top: bool,
     ) -> Result<u32, String> {
-        self.compile_stmts(st, &block.stmts, is_top)
+        let defers = xc_ast::stmt::direct_defer_count(&block.stmts);
+        if defers > 0 {
+            self.emit(st, Instr::new(Opcode::Mark), block.span.lo.0);
+            st.defer_depth += 1;
+        }
+        let r = self.compile_stmts(st, &block.stmts, is_top);
+        if defers > 0 {
+            st.defer_depth -= 1;
+            self.emit(st, Instr::new(Opcode::EndScope), block.span.lo.0);
+        }
+        r
     }
 
     /// 把表达式的值收进 `dst`（简单读取已是目标寄存器时零指令）。
@@ -674,6 +722,78 @@ impl<'p> Lower<'p> {
                 Ok(rd)
             }
             ExprKind::Lambda(l) => self.compile_lambda(st, l, pos),
+            ExprKind::Throw(v) => {
+                if st.in_defer {
+                    return Err("throw inside defer is not supported yet".to_string());
+                }
+                let r = match v {
+                    Some(v) => self.compile_expr(st, v, is_top)?,
+                    None => {
+                        let r = self.temp(st)?;
+                        self.emit(st, Instr::abx(Opcode::LoadNil, r, 0), pos);
+                        r
+                    }
+                };
+                // 同帧 catch：错误值 → rd，直跳 catch（先穿越 defer 作用域）；
+                // 无 try：RAISE（er ← 值并返回，defer 由走栈执行）。
+                if let Some(tf) = st.try_stack.last().map(|t| (t.rd, t.patches.len())) {
+                    let (rd, patch_base) = tf;
+                    if st.defer_depth > 0 {
+                        for _ in 0..st.defer_depth {
+                            self.emit(st, Instr::new(Opcode::EndScope), pos);
+                        }
+                    }
+                    if r != rd {
+                        self.emit(st, Instr::abc(Opcode::Move, rd, r, 0), pos);
+                    }
+                    let j = self.emit_jump(st, Opcode::Jmp, 0, pos);
+                    st.try_stack.last_mut().unwrap().patches.push(j);
+                    let _ = patch_base;
+                } else {
+                    self.emit(st, Instr::abc(Opcode::Raise, r, 0, 0), pos);
+                }
+                Ok(r)
+            }
+            ExprKind::Try(body, catchers, else_block) => {
+                if else_block.is_some() {
+                    return Err("try-else is not supported yet".to_string());
+                }
+                if catchers.len() != 1 {
+                    return Err("try requires exactly one catch clause".to_string());
+                }
+                let catcher = &catchers[0];
+                let err_name = match &catcher.pattern.kind {
+                    PatternKind::Bind(ident, _) => ident.name,
+                    PatternKind::Expr(pe) => match &pe.kind {
+                        ExprKind::Path(p) if p.segments.len() == 1 => p.segments[0].ident.name,
+                        _ => return Err("catch pattern must be a binding".to_string()),
+                    },
+                    _ => return Err("catch pattern must be a binding".to_string()),
+                };
+                let rd = self.temp(st)?;
+                st.try_stack.push(TryFrame {
+                    rd,
+                    patches: Vec::new(),
+                });
+                let bv = self.compile_expr(st, body, is_top)?;
+                if bv != rd {
+                    self.emit(st, Instr::abc(Opcode::Move, rd, bv, 0), pos);
+                }
+                let j_end = self.emit_jump(st, Opcode::Jmp, 0, pos);
+                let tf = st.try_stack.pop().unwrap();
+                // catch 入口：JMPERR 已把 er 写入 rd；同帧 throw 直写 rd。
+                for p in &tf.patches {
+                    self.patch(st, *p);
+                }
+                let e_reg = self.bind_local(st, err_name, false, false)?;
+                self.emit(st, Instr::abc(Opcode::Move, e_reg, rd, 0), pos);
+                let cv = self.compile_stmts(st, &catcher.stmts, false)?;
+                if cv != rd {
+                    self.emit(st, Instr::abc(Opcode::Move, rd, cv, 0), pos);
+                }
+                self.patch(st, j_end);
+                Ok(rd)
+            }
             ExprKind::If(cond, then, else_) => {
                 let rc = self.compile_expr(st, cond, is_top)?;
                 let j_else = self.emit_jump(st, Opcode::JmpF, rc, pos);
@@ -756,6 +876,9 @@ impl<'p> Lower<'p> {
                 Ok(rd)
             }
             ExprKind::Return(val) => {
+                if st.in_defer {
+                    return Err("return inside defer is not supported yet".to_string());
+                }
                 let r = match val {
                     Some(v) => self.compile_expr(st, v, is_top)?,
                     None => {
@@ -775,6 +898,9 @@ impl<'p> Lower<'p> {
                 if val.is_some() {
                     return Err("break with a value is not supported yet".to_string());
                 }
+                if st.in_defer {
+                    return Err("break inside defer is not supported yet".to_string());
+                }
                 if st.loop_stack.is_empty() {
                     return Err("break outside loop".to_string());
                 }
@@ -784,6 +910,9 @@ impl<'p> Lower<'p> {
                 Ok(r)
             }
             ExprKind::Continue(_) => {
+                if st.in_defer {
+                    return Err("continue inside defer is not supported yet".to_string());
+                }
                 let info = st
                     .loop_stack
                     .last()
@@ -911,6 +1040,21 @@ impl<'p> Lower<'p> {
                     self.emit(st, Instr::abc(Opcode::CallNat, ra, 0, count), pos);
                     return Ok(ra);
                 }
+                if name.as_str() == "panic" {
+                    let ra = self.temp(st)?;
+                    let mut k = 0u32;
+                    for arg in &args.0 {
+                        if let Argument::Ordinal(e) = arg {
+                            self.compile_into(st, ra + k, e, is_top)?;
+                            k += 1;
+                        }
+                    }
+                    if count != 1 {
+                        return Err("panic takes exactly one argument".to_string());
+                    }
+                    self.emit(st, Instr::abc(Opcode::Panic, ra, 0, 0), pos);
+                    return Ok(ra);
+                }
                 // 被调者优先级：局部 / upval / 槽（间接 CALL）→ 模块函数（CALLK）。
                 match self.resolve(st, name) {
                     Some(Resolved::Local(info)) => {
@@ -950,6 +1094,7 @@ impl<'p> Lower<'p> {
                             }
                         }
                         self.emit(st, Instr::abc(Opcode::CallK, ra, idx, count), pos);
+                        self.emit_try_check(st, pos);
                         Ok(ra)
                     }
                 }
@@ -979,7 +1124,18 @@ impl<'p> Lower<'p> {
         // 结果落在 rc+1（被调 r0 = 本帧的 rc+1 槽），必须在本帧窗口内。
         self.ensure_reg(st, rc + 1)?;
         self.emit(st, Instr::abc(Opcode::Call, rc, 0, count), pos);
+        self.emit_try_check(st, pos);
         Ok(())
+    }
+
+    /// try 区域内的调用：er 非空即携值写入 try 的 rd 并跳到 catch 入口。
+    fn emit_try_check(&mut self, st: &mut FnState, pos: u32) {
+        let Some(tf) = st.try_stack.last() else {
+            return;
+        };
+        let rd = tf.rd;
+        let j = self.emit_jump(st, Opcode::JmpErr, rd, pos);
+        st.try_stack.last_mut().unwrap().patches.push(j);
     }
 
     fn compile_assign(
@@ -1380,6 +1536,11 @@ fn scan_stmts(stmts: &[Stmt], bound: &mut Vec<Symbol>, set: &mut HashSet<Symbol>
             StmtKind::Expr(e) | StmtKind::ExprSemi(e) => {
                 free.extend(scan_expr(e, bound, set));
             }
+            // defer 体与外层同帧执行：其自由名同为本 lambda 的捕获。
+            StmtKind::Defer(b) => {
+                let mut b2 = bound.clone();
+                free.extend(scan_stmts(&b.stmts, &mut b2, set));
+            }
             StmtKind::Let(pat, init) => {
                 if let Some(init) = init {
                     free.extend(scan_expr(init, bound, set));
@@ -1613,6 +1774,18 @@ func fib (arity 1, regs 11):
             assert_eq!(dump, expected);
             let out = crate::interp::run(&m, src).unwrap();
             assert_eq!(out, "2\n");
+        });
+    }
+
+    #[test]
+    fn debug_try() {
+        create_session_globals_then(|| {
+            let src = include_str!("../../xc_driver/tests/programs/try-catch.x");
+            let parsed = xc_check::parse_program(Filename::Normal("t".into()), src).unwrap();
+            let program = xc_check::check(parsed).unwrap();
+            let m = compile(&program).unwrap();
+            println!("{}", crate::isa::dump_module(&m));
+            println!("out = {:?}", crate::interp::run(&m, src));
         });
     }
 

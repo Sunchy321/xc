@@ -62,6 +62,14 @@ pub enum Opcode {
     Call = 42,
     CapUp = 43,
     GetSlotCell = 44,
+    Raise = 45,
+    RetErr = 46,
+    JmpErr = 47,
+    Panic = 48,
+    Defer = 49,
+    EndDefer = 50,
+    Mark = 51,
+    EndScope = 52,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +83,9 @@ pub enum Format {
 pub fn format_of(op: Opcode) -> Format {
     match op {
         // 条件跳转需要（条件寄存器， 偏移）两个字段：走 iAsBx（A + sJ:16）。
-        Opcode::LoadI | Opcode::AddI | Opcode::JmpF | Opcode::JmpT => Format::AsBx,
+        Opcode::LoadI | Opcode::AddI | Opcode::JmpF | Opcode::JmpT | Opcode::JmpErr => {
+            Format::AsBx
+        }
         Opcode::LoadK | Opcode::GetSlot | Opcode::SetSlot => Format::ABx,
         Opcode::Jmp => Format::SJ,
         _ => Format::Abc,
@@ -248,6 +258,30 @@ impl Instr {
         if v == Opcode::GetSlotCell as u8 {
             return Opcode::GetSlotCell;
         }
+        if v == Opcode::Raise as u8 {
+            return Opcode::Raise;
+        }
+        if v == Opcode::RetErr as u8 {
+            return Opcode::RetErr;
+        }
+        if v == Opcode::JmpErr as u8 {
+            return Opcode::JmpErr;
+        }
+        if v == Opcode::Panic as u8 {
+            return Opcode::Panic;
+        }
+        if v == Opcode::Defer as u8 {
+            return Opcode::Defer;
+        }
+        if v == Opcode::EndDefer as u8 {
+            return Opcode::EndDefer;
+        }
+        if v == Opcode::Mark as u8 {
+            return Opcode::Mark;
+        }
+        if v == Opcode::EndScope as u8 {
+            return Opcode::EndScope;
+        }
         unreachable!("invalid opcode byte {v} in {:#010x}", self.0)
     }
 
@@ -397,6 +431,14 @@ fn dump_instr(instr: Instr, ip: usize, m: &Module, w: &mut impl fmt::Write) {
         Opcode::Upval => write!(w, "UPVAL {}, u{}", r(instr.a()), instr.b()),
         Opcode::Call => write!(w, "CALL {}, argc={}", r(instr.a()), instr.c()),
         Opcode::CapUp => write!(w, "CAPUP u{}", instr.b()),
+        Opcode::Raise => write!(w, "RAISE {}", r(instr.a())),
+        Opcode::RetErr => write!(w, "RETERR"),
+        Opcode::JmpErr => write!(w, "JMPERR {}, -> {}", r(instr.a()), target16(instr, ip)),
+        Opcode::Panic => write!(w, "PANIC {}", r(instr.a())),
+        Opcode::Defer => write!(w, "DEFER -> {}", instr.bx() as usize),
+        Opcode::EndDefer => write!(w, "ENDDEFER"),
+        Opcode::Mark => write!(w, "MARK"),
+        Opcode::EndScope => write!(w, "ENDSCOPE"),
         Opcode::GetSlotCell => write!(w, "GETSLOTCELL {}, s{}", r(instr.a()), instr.bx()),
     }
     .unwrap();

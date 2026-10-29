@@ -59,7 +59,7 @@ pub fn check(parsed: Parsed) -> Result<Program, String> {
 fn collect_var_stmts(stmts: &[Stmt], set: &mut HashSet<Symbol>) {
     for s in stmts {
         match &s.kind {
-            StmtKind::Empty => {}
+            StmtKind::Empty | StmtKind::Defer(..) => {}
             StmtKind::Expr(e) | StmtKind::ExprSemi(e) => collect_var_expr(e, set),
             StmtKind::Let(pat, init) => {
                 if let xc_ast::pattern::PatternKind::Bind(ident, _) = &pat.kind {
@@ -166,6 +166,7 @@ fn check_func(f: &P<Func>, program: &Program) -> Result<(), String> {
 fn check_stmt(s: &Stmt, program: &Program) -> Result<(), String> {
     match &s.kind {
         StmtKind::Expr(e) | StmtKind::ExprSemi(e) => check_expr(e, program),
+        StmtKind::Defer(b) => check_block(b, program),
         StmtKind::Let(_, init) => {
             if let Some(init) = init {
                 check_expr(init, program)?;
@@ -188,7 +189,7 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
     match &e.kind {
         Placeholder | This | SelfExpr | MacroCall(..) | Caret | Dollar | LambdaArgOrdinal(_)
         | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Dict(_) | Match(..)
-        | Try(..) | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
+        | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
         | MemberDynamicAccess(..) | MethodCall(..) | Cast(..) | Await(..)
         | Let(..) => {
             Err(format!("unsupported expression in this build: {e:?}"))
@@ -198,6 +199,30 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
             FuncBody::Arrow(e) => check_expr(e, program),
             FuncBody::Semicolon => Ok(()),
         },
+        Try(body, catchers, else_block) => {
+            check_expr(body, program)?;
+            for c in catchers {
+                // `catch e` 的绑定模式解析为单段路径表达式。
+                let binding = match &c.pattern.kind {
+                    xc_ast::pattern::PatternKind::Bind(..) => true,
+                    xc_ast::pattern::PatternKind::Expr(pe) => matches!(
+                        &pe.kind,
+                        ExprKind::Path(pp) if pp.segments.len() == 1
+                    ),
+                    _ => false,
+                };
+                if !binding {
+                    return Err("catch pattern must be a binding".to_string());
+                }
+                for s in &c.stmts {
+                    check_stmt(s, program)?;
+                }
+            }
+            if let Some(b) = else_block {
+                return Err("try-else is not supported yet".to_string());
+            }
+            Ok(())
+        }
         Subscript(base, args) => {
             check_expr(base, program)?;
             for arg in &args.0 {
@@ -268,7 +293,7 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
             if let ExprKind::Path(p) = &callee.kind {
                 if p.segments.len() == 1 {
                     let name = p.segments[0].ident.name;
-                    if name.as_str() == "print" {
+                    if name.as_str() == "print" || name.as_str() == "panic" {
                         for arg in &args.0 {
                             if let Argument::Ordinal(e) = arg {
                                 check_expr(e, program)?;

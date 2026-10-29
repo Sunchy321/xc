@@ -88,7 +88,7 @@ impl<'a> Parser<'a> {
 
             Expr(..) | StmtKind::Let(..) => {}
 
-            Empty | ExprSemi(..) => {
+            Defer(..) | Empty | ExprSemi(..) => {
                 eat_semi = false;
             }
         }
@@ -129,6 +129,11 @@ impl<'a> Parser<'a> {
             return Err(self
                 .diag_ctx()
                 .struct_span_error(self.token.span, "unexpected `;`"));
+        } else if self.token.is_keyword(kw::Defer) {
+            self.next();
+            let block = self.parse_block()?;
+            let span = lo.to(self.prev_token.span);
+            self.make_stmt(StmtKind::Defer((*block).clone()), span)
         } else if self.token.kind != TokenKind::CloseDelim(Delimiter::Brace) {
             // expr stmt
             let expr = self.parse_expr_res(Restrictions::STMT_EXPR)?;
