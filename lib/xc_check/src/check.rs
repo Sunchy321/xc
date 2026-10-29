@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use xc_ast::expr::{Argument, Expr, ExprItem, ExprKind};
 use xc_ast::func::{Func, FuncBody};
@@ -13,6 +13,9 @@ pub struct Program {
     pub funcs: Vec<P<Func>>,
     pub func_indices: HashMap<Symbol, u32>,
     pub top: Vec<Stmt>,
+    /// 程序内被 `let` / 赋值绑定过的名字：名字调用（`c()`）的放行判据——
+    /// 不在此集合且非模块函数的名字仍报 undefined function（M1 折中）。
+    pub var_names: HashSet<Symbol>,
 }
 
 pub fn check(parsed: Parsed) -> Result<Program, String> {
@@ -27,8 +30,20 @@ pub fn check(parsed: Parsed) -> Result<Program, String> {
     let program = Program {
         funcs: parsed.funcs,
         func_indices,
+        var_names: HashSet::new(),
         top: parsed.top,
     };
+
+    let mut var_names = HashSet::new();
+    for f in &program.funcs {
+        if let FuncBody::Block(b) = &f.body {
+            collect_var_stmts(&b.stmts, &mut var_names);
+        } else if let FuncBody::Arrow(e) = &f.body {
+            collect_var_expr(e, &mut var_names);
+        }
+    }
+    collect_var_stmts(&program.top, &mut var_names);
+    let program = Program { var_names, ..program };
 
     for f in &program.funcs {
         check_func(f, &program)?;
@@ -37,6 +52,101 @@ pub fn check(parsed: Parsed) -> Result<Program, String> {
         check_stmt(stmt, &program)?;
     }
     Ok(program)
+}
+
+// ---- 变量名收集（名字调用的放行判据）----
+
+fn collect_var_stmts(stmts: &[Stmt], set: &mut HashSet<Symbol>) {
+    for s in stmts {
+        match &s.kind {
+            StmtKind::Empty => {}
+            StmtKind::Expr(e) | StmtKind::ExprSemi(e) => collect_var_expr(e, set),
+            StmtKind::Let(pat, init) => {
+                if let xc_ast::pattern::PatternKind::Bind(ident, _) = &pat.kind {
+                    set.insert(ident.name);
+                }
+                if let Some(init) = init {
+                    collect_var_expr(init, set);
+                }
+            }
+        }
+    }
+}
+
+fn collect_var_expr(e: &Expr, set: &mut HashSet<Symbol>) {
+    match &e.kind {
+        ExprKind::Infix(sym, exprs) => {
+            if *sym == xc_span::symbol::op::Assign {
+                if let Some(first) = exprs.first() {
+                    if let ExprKind::Path(p) = &first.kind {
+                        if p.segments.len() == 1 {
+                            set.insert(p.segments[0].ident.name);
+                        }
+                    }
+                }
+            }
+            for e in exprs {
+                collect_var_expr(e, set);
+            }
+        }
+        ExprKind::Array(items) => {
+            for item in items {
+                if let ExprItem::Expr(e) = item {
+                    collect_var_expr(e, set);
+                }
+            }
+        }
+        ExprKind::Block(b) => collect_var_stmts(&b.stmts, set),
+        ExprKind::If(c, t, el) => {
+            collect_var_expr(c, set);
+            collect_var_expr(t, set);
+            if let Some(el) = el {
+                collect_var_expr(el, set);
+            }
+        }
+        ExprKind::While(c, body, el, _) => {
+            collect_var_expr(c, set);
+            collect_var_expr(body, set);
+            if let Some(el) = el {
+                collect_var_expr(el, set);
+            }
+        }
+        ExprKind::For(pat, iter, body, else_, ..) => {
+            collect_var_expr(iter, set);
+            if let xc_ast::pattern::PatternKind::Bind(ident, _) = &pat.kind {
+                set.insert(ident.name);
+            }
+            collect_var_stmts(&body.stmts, set);
+            if let Some(el) = else_ {
+                collect_var_stmts(&el.stmts, set);
+            }
+        }
+        ExprKind::Lambda(l) => match &l.body {
+            FuncBody::Block(b) => collect_var_stmts(&b.stmts, set),
+            FuncBody::Arrow(e2) => collect_var_expr(e2, set),
+            FuncBody::Semicolon => {}
+        },
+        ExprKind::Subscript(base, args) | ExprKind::FuncCall(base, args, _) => {
+            collect_var_expr(base, set);
+            for arg in &args.0 {
+                if let Argument::Ordinal(e) = arg {
+                    collect_var_expr(e, set);
+                }
+            }
+        }
+        ExprKind::Prefix(_, x) | ExprKind::Paren(x) => collect_var_expr(x, set),
+        ExprKind::Comparison(_, exprs) => {
+            for e in exprs {
+                collect_var_expr(e, set);
+            }
+        }
+        ExprKind::Return(v) | ExprKind::Throw(v) | ExprKind::Break(v, _) => {
+            if let Some(v) = v {
+                collect_var_expr(v, set);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn check_func(f: &P<Func>, program: &Program) -> Result<(), String> {
@@ -77,11 +187,25 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
     use ExprKind::*;
     match &e.kind {
         Placeholder | This | SelfExpr | MacroCall(..) | Caret | Dollar | LambdaArgOrdinal(_)
-        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Dict(_) | Lambda(_) | Match(..)
+        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Dict(_) | Match(..)
         | Try(..) | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
-        | MemberDynamicAccess(..) | MethodCall(..) | Subscript(..) | Cast(..) | Await(..)
+        | MemberDynamicAccess(..) | MethodCall(..) | Cast(..) | Await(..)
         | Let(..) => {
             Err(format!("unsupported expression in this build: {e:?}"))
+        }
+        Lambda(l) => match &l.body {
+            FuncBody::Block(b) => check_block(b, program),
+            FuncBody::Arrow(e) => check_expr(e, program),
+            FuncBody::Semicolon => Ok(()),
+        },
+        Subscript(base, args) => {
+            check_expr(base, program)?;
+            for arg in &args.0 {
+                if let Argument::Ordinal(e) = arg {
+                    check_expr(e, program)?;
+                }
+            }
+            Ok(())
         }
         Literal(_) | Nil | Path(_) => Ok(()),
         Paren(inner) => check_expr(inner, program),
@@ -139,35 +263,57 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
             Ok(())
         }
         FuncCall(callee, args, _) => {
-            let name = match &callee.kind {
-                ExprKind::Path(p) if p.segments.len() == 1 => p.segments[0].ident.name,
-                _ => return Err("only simple function calls are supported".to_string()),
-            };
-            if name.as_str() == "print" {
-                for arg in &args.0 {
-                    if let Argument::Ordinal(e) = arg {
-                        check_expr(e, program)?;
+            // 被调者可为任意表达式（变量持有闭包、链式调用）；仅当为已知模块
+            // 函数名时做实参个数检查。
+            if let ExprKind::Path(p) = &callee.kind {
+                if p.segments.len() == 1 {
+                    let name = p.segments[0].ident.name;
+                    if name.as_str() == "print" {
+                        for arg in &args.0 {
+                            if let Argument::Ordinal(e) = arg {
+                                check_expr(e, program)?;
+                            }
+                        }
+                        return Ok(());
+                    }
+                    if !program.func_indices.contains_key(&name)
+                        && !program.var_names.contains(&name)
+                    {
+                        return Err(format!("undefined function: {}", name.as_str()));
+                    }
+                    if let Some(f) = program.funcs.iter().find(|f| f.ident.name == name) {
+                        let expected = f.sig.params.len();
+                        let mut actual = 0;
+                        for arg in &args.0 {
+                            match arg {
+                                Argument::Ordinal(e) => {
+                                    actual += 1;
+                                    check_expr(e, program)?;
+                                }
+                                Argument::Named(..) => {
+                                    return Err("named arguments not supported yet".to_string())
+                                }
+                                Argument::Expansion(..) => {
+                                    return Err(
+                                        "expansion arguments not supported yet".to_string()
+                                    )
+                                }
+                            }
+                        }
+                        if actual != expected {
+                            return Err(format!(
+                                "function {} expects {expected} arguments, got {actual}",
+                                name.as_str()
+                            ));
+                        }
+                        return Ok(());
                     }
                 }
-                return Ok(());
             }
-            program
-                .func_indices
-                .get(&name)
-                .ok_or_else(|| format!("undefined function: {}", name.as_str()))?;
-            let f = program
-                .funcs
-                .iter()
-                .find(|f| f.ident.name == name)
-                .expect("func index present but func missing");
-            let expected = f.sig.params.len();
-            let mut actual = 0;
+            check_expr(callee, program)?;
             for arg in &args.0 {
                 match arg {
-                    Argument::Ordinal(e) => {
-                        actual += 1;
-                        check_expr(e, program)?;
-                    }
+                    Argument::Ordinal(e) => check_expr(e, program)?,
                     Argument::Named(..) => {
                         return Err("named arguments not supported yet".to_string())
                     }
@@ -175,12 +321,6 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                         return Err("expansion arguments not supported yet".to_string())
                     }
                 }
-            }
-            if actual != expected {
-                return Err(format!(
-                    "function {} expects {expected} arguments, got {actual}",
-                    name.as_str()
-                ));
             }
             Ok(())
         }

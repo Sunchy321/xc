@@ -17,7 +17,7 @@ fn left_associative() {
 
 #[test]
 fn variables_and_assignment() {
-    assert_eq!(run("let x = 5; x = x + 1; print(x);").unwrap(), "6\n");
+    assert_eq!(run("let mut x = 5; x = x + 1; print(x);").unwrap(), "6\n");
 }
 
 #[test]
@@ -31,8 +31,8 @@ fn if_else() {
 #[test]
 fn while_loop_sum() {
     let src = "\
-let i = 0;
-let sum = 0;
+let mut i = 0;
+let mut sum = 0;
 while i < 10 { sum = sum + i; i = i + 1; }
 print(sum);
 ";
@@ -82,7 +82,10 @@ print(add(5));
 
 #[test]
 fn string_concat() {
-    assert_eq!(run("print(\"a\" + \"b\");").unwrap(), "ab\n");
+    // 拼接是 `~`（CONCAT）；`+` 仅算术，对 string 无定义。
+    assert_eq!(run("print(\"a\" ~ \"b\");").unwrap(), "ab\n");
+    let err = run("print(\"a\" + \"b\");").unwrap_err();
+    assert!(err.contains("arithmetic operands must be int"), "{err}");
 }
 
 #[test]
@@ -101,7 +104,7 @@ fn logic_short_circuit() {
 #[test]
 fn break_in_while() {
     let src = "\
-let i = 0;
+let mut i = 0;
 while true { i = i + 1; if i >= 3 { break; } }
 print(i);
 ";
@@ -111,8 +114,8 @@ print(i);
 #[test]
 fn continue_in_while() {
     let src = "\
-let i = 0;
-let sum = 0;
+let mut i = 0;
+let mut sum = 0;
 while i < 5 { i = i + 1; if i == 3 { continue; } sum = sum + i; }
 print(sum);
 ";

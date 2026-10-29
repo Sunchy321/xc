@@ -1,3 +1,5 @@
+pub mod heap;
 pub mod value;
 
-pub use value::{write_value, Value};
+pub use heap::{Heap, Obj, ObjKind, ObjRef};
+pub use value::{lit_scalar, write_value, Value};
