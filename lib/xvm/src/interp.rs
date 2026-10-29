@@ -22,6 +22,7 @@ struct Frame {
 
 pub fn run(module: &Module, source: &str) -> Result<String, String> {
     let mut heap = Heap::new();
+    heap.set_gc_stress(std::env::var("XVM_GC_EVERY_ALLOC").is_ok());
     let mut slots = vec![Value::Void; module.num_slots];
     // cell 化槽位：加载期建 cell，此后 GETSLOT/SETSLOT 透明穿透。
     for (idx, marked) in module.cell_slots.iter().enumerate() {
@@ -41,6 +42,27 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
         env: Vec::new(),
     }];
     let mut out = String::new();
+
+    // 分配 safepoint：栈、槽表、各帧捕获环境都是精确根集。在分配型指令的
+    // 操作数尚在寄存器（栈槽）时调用——GC 只回收不可达对象，不影响执行。
+    fn maybe_gc(
+        heap: &mut Heap,
+        stack: &[Value],
+        slots: &[Value],
+        frames: &[Frame],
+    ) {
+        if !heap.should_collect() {
+            return;
+        }
+        let mut roots: Vec<&[Value]> = vec![stack, slots];
+        for f in frames {
+            roots.push(&f.env);
+        }
+        let (freed, kept) = heap.collect(&roots);
+        if std::env::var("XVM_TRACE_GC").is_ok() {
+            eprintln!("gc: freed {freed}, kept {kept}");
+        }
+    }
 
     loop {
         let fi = frames.last().unwrap().func as usize;
@@ -153,6 +175,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::Concat => {
+                maybe_gc(&mut heap, &stack, &slots, &frames);
                 let (dst, l, r) = (
                     base + instr.a() as usize,
                     stack[base + instr.b() as usize],
@@ -210,6 +233,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::NewArr => {
+                maybe_gc(&mut heap, &stack, &slots, &frames);
                 let (dst, base_i, count) = (instr.a() as usize, instr.b() as usize, instr.c() as usize);
                 let elems = stack[base + base_i..base + base_i + count].to_vec();
                 let o = heap.alloc(ObjKind::Arr(elems));
@@ -325,6 +349,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::AllocCell => {
+                maybe_gc(&mut heap, &stack, &slots, &frames);
                 let v = stack[base + instr.b() as usize];
                 let o = heap.alloc(ObjKind::Cell(v));
                 stack[base + instr.a() as usize] = Value::Obj(o);
@@ -355,6 +380,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = stack[base + instr.b() as usize];
             }
             Opcode::RefElem => {
+                maybe_gc(&mut heap, &stack, &slots, &frames);
                 let (arr, idx) = (
                     stack[base + instr.b() as usize],
                     stack[base + instr.c() as usize],
@@ -396,6 +422,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = Value::Obj(o);
             }
             Opcode::Closure => {
+                maybe_gc(&mut heap, &stack, &slots, &frames);
                 // 捕获描述伪指令紧随其后（CapRef/CapUp 序列），一并消费。
                 let frame_env = frames.last().unwrap().env.clone();
                 let mut caps = 0usize;
