@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use xc_ast::{
-    expr::{Argument, Expr, ExprItem, ExprKind, ForLoopKind},
+    expr::{Argument, DictItem, Expr, ExprItem, ExprKind, ForLoopKind},
     func::{FuncBody, FuncReturn},
     literal::LiteralKind,
     pattern::{Pattern, PatternAssertion, PatternKind},
@@ -36,6 +36,14 @@ enum ArrayAccess {
     Write,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexedContainer {
+    Array,
+    Dictionary,
+    Deferred,
+    Unknown,
+}
+
 #[derive(Clone)]
 struct ArrayConstraint {
     array: Ty,
@@ -55,6 +63,7 @@ struct Checker<'a> {
     returns: HashMap<u32, Vec<Ty>>,
     type_constraints: Vec<TypeConstraint>,
     array_constraints: Vec<ArrayConstraint>,
+    empty_dictionaries: Vec<(Ty, Span)>,
     return_declarations: HashMap<u32, (Symbol, u32)>,
     loop_results: Vec<Vec<Ty>>,
     current_return: Option<Ty>,
@@ -80,6 +89,7 @@ impl<'a> Checker<'a> {
             returns: HashMap::new(),
             type_constraints: Vec::new(),
             array_constraints: Vec::new(),
+            empty_dictionaries: Vec::new(),
             return_declarations: HashMap::new(),
             loop_results: Vec::new(),
             current_return: None,
@@ -203,23 +213,47 @@ impl<'a> Checker<'a> {
                 }
             }
             self.solve_array_constraints(false)?;
+            self.solve_type_constraints(false)?;
             if self.solutions == before {
                 break;
             }
         }
 
         self.solve_array_constraints(true)?;
+        self.solve_type_constraints(true)?;
         self.reject_unresolved_returns()?;
+        for (dictionary, span) in self.empty_dictionaries.clone() {
+            let dictionary = self.resolve(dictionary);
+            if first_var(&dictionary).is_some() || contains_unknown(&dictionary) {
+                return Err(format!(
+                    "cannot infer empty dictionary type at byte {}",
+                    span.lo.0
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn solve_type_constraints(&mut self, final_pass: bool) -> Result<(), String> {
         for constraint in self.type_constraints.clone() {
             let actual = self.resolve(constraint.actual);
             let expected = self.resolve(constraint.expected);
             if contains_unknown(&actual) || contains_unknown(&expected) {
                 continue;
             }
-            if let Some(unresolved) = first_var(&actual).or_else(|| first_var(&expected)) {
-                return Err(self.cannot_infer_return(unresolved));
+            if first_var(&actual).is_some() || first_var(&expected).is_some() {
+                if can_unify(&actual, &expected) {
+                    if let Ty::Optional(inner) = &expected
+                        && !matches!(&actual, Ty::Optional(_))
+                    {
+                        self.unify(actual, inner.as_ref().clone(), constraint.span)?;
+                    } else {
+                        self.unify(actual, expected, constraint.span)?;
+                    }
+                }
+                continue;
             }
-            if !is_subtype(&actual, &expected) {
+            if final_pass && !is_subtype(&actual, &expected) {
                 return Err(format!(
                     "{}: expected {expected}, got {actual} at byte {}",
                     constraint.context, constraint.span.lo.0
@@ -233,65 +267,84 @@ impl<'a> Checker<'a> {
         for constraint in self.array_constraints.clone() {
             let array = self.resolve(constraint.array);
             let element = constraint.element.clone();
-            let (element_type, check_index) = match array {
-                Ty::Array(array_element) => (Some(*array_element), true),
-                union @ Ty::Union(_) if contains_unknown(&union) => (Some(Ty::Unknown), false),
+            let (element_type, index_type_constraints) = match array {
+                Ty::Array(array_element) => (
+                    Some(*array_element),
+                    vec![(Ty::Int, "array index must be int")],
+                ),
+                Ty::Dictionary { key, value } => {
+                    (Some(*value), vec![(*key, "dictionary key type mismatch")])
+                }
+                union @ Ty::Union(_) if contains_unknown(&union) => (Some(Ty::Unknown), Vec::new()),
                 Ty::Union(members) => {
                     let actual = Ty::Union(members.clone());
-                    let elements = members
-                        .into_iter()
-                        .map(|member| match member {
-                            Ty::Array(element) => Some(*element),
-                            _ => None,
-                        })
-                        .collect::<Option<Vec<_>>>();
-                    match elements {
-                        Some(elements) => {
-                            let element = match constraint.access {
-                                ArrayAccess::Read => elements.into_iter().reduce(common_type),
-                                ArrayAccess::Write => {
-                                    let first = elements.first().cloned();
-                                    first
-                                        .filter(|first| elements.iter().all(|ty| ty == first))
-                                        .or(Some(Ty::Never))
-                                }
-                            };
-                            (element, true)
+                    let mut elements = Vec::with_capacity(members.len());
+                    let mut index_types = Vec::with_capacity(members.len());
+                    let mut supported = true;
+                    for member in members {
+                        match member {
+                            Ty::Array(element) => {
+                                elements.push(*element);
+                                index_types.push((Ty::Int, "array index must be int"));
+                            }
+                            Ty::Dictionary { key, value } => {
+                                elements.push(*value);
+                                index_types.push((*key, "dictionary key type mismatch"));
+                            }
+                            _ => {
+                                supported = false;
+                                break;
+                            }
                         }
-                        None if final_pass => {
-                            return Err(format!(
-                                "{}: expected array, got {actual} at byte {}",
-                                constraint.context, constraint.span.lo.0
-                            ));
-                        }
-                        None => (None, false),
+                    }
+                    if supported {
+                        let element = match constraint.access {
+                            ArrayAccess::Read => elements.iter().cloned().reduce(common_type),
+                            ArrayAccess::Write => {
+                                let first = elements.first().cloned();
+                                first
+                                    .filter(|first| elements.iter().all(|ty| ty == first))
+                                    .or(Some(Ty::Never))
+                            }
+                        };
+                        (element, index_types)
+                    } else if final_pass {
+                        return Err(format!(
+                            "{}: expected array or dictionary, got {actual} at byte {}",
+                            constraint.context, constraint.span.lo.0
+                        ));
+                    } else {
+                        (None, Vec::new())
                     }
                 }
-                Ty::Unknown => (Some(Ty::Unknown), false),
-                Ty::Never => (Some(Ty::Never), false),
-                Ty::Var(_) => (None, false),
+                Ty::Unknown => (Some(Ty::Unknown), Vec::new()),
+                Ty::Never => (Some(Ty::Never), Vec::new()),
+                Ty::Var(_) => (None, Vec::new()),
                 other => {
                     if final_pass {
                         return Err(format!(
-                            "{}: expected array, got {other} at byte {}",
+                            "{}: expected array or dictionary, got {other} at byte {}",
                             constraint.context, constraint.span.lo.0
                         ));
                     }
-                    (None, false)
+                    (None, Vec::new())
                 }
             };
             if let Some(element_type) = element_type {
                 self.merge_inferred_type(element, element_type, constraint.span)?;
-                if final_pass
-                    && check_index
-                    && let Some(index_type) = constraint.index_type
-                {
-                    self.require_type(
-                        index_type,
-                        &Ty::Int,
-                        constraint.span,
-                        "array index must be int",
-                    )?;
+                if final_pass && let Some(index_type) = constraint.index_type.clone() {
+                    for (expected_index, context) in index_type_constraints {
+                        if first_var(&expected_index).is_some() {
+                            self.unify(expected_index, index_type.clone(), constraint.span)?;
+                        } else {
+                            self.require_type(
+                                index_type.clone(),
+                                &expected_index,
+                                constraint.span,
+                                context,
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -350,6 +403,30 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
             (Ty::Array(left), Ty::Array(right)) => self.unify(*left, *right, span),
+            (
+                Ty::Dictionary {
+                    key: left_key,
+                    value: left_value,
+                },
+                Ty::Dictionary {
+                    key: right_key,
+                    value: right_value,
+                },
+            ) => {
+                self.unify(*left_key, *right_key, span)?;
+                self.unify(*left_value, *right_value, span)
+            }
+            (Ty::Optional(left), Ty::Optional(right)) => self.unify(*left, *right, span),
+            (
+                Ty::Reference {
+                    target: left,
+                    mutable: left_mutable,
+                },
+                Ty::Reference {
+                    target: right,
+                    mutable: right_mutable,
+                },
+            ) if left_mutable == right_mutable => self.unify(*left, *right, span),
             (
                 Ty::Function {
                     params: left_params,
@@ -493,6 +570,10 @@ impl<'a> Checker<'a> {
                 LiteralKind::String | LiteralKind::RawString { .. } => Ty::String,
                 _ => Ty::Unknown,
             }),
+            ExprKind::Nil => match expected.map(|ty| self.resolve(ty.clone())) {
+                Some(Ty::Optional(_)) => Ok(Ty::Optional(Box::new(Ty::Never))),
+                _ => Ok(Ty::Unknown),
+            },
             ExprKind::Path(path) if path.segments.len() == 1 => {
                 let name = path.segments[0].ident.name;
                 if let Some(ty) = self.lookup(name) {
@@ -508,6 +589,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Paren(inner) => self.infer_expr(inner, expected),
             ExprKind::Array(items) => self.infer_array(items, expected, expression.span),
+            ExprKind::Dict(items) => self.infer_dictionary(items, expected, expression.span),
             ExprKind::Block(block) => self.infer_block(block, expected),
             ExprKind::If(condition, then, else_) => {
                 self.infer_if(condition, then, else_.as_deref(), expected)
@@ -524,12 +606,14 @@ impl<'a> Checker<'a> {
             ExprKind::Comparison(operators, operands) => {
                 self.infer_comparison(operators, operands.as_slice())
             }
-            ExprKind::Subscript(base, arguments) => self.infer_subscript(
-                base,
-                arguments.0.as_slice(),
-                expression.span,
-                ArrayAccess::Read,
-            ),
+            ExprKind::Subscript(base, arguments) => self
+                .infer_subscript(
+                    base,
+                    arguments.0.as_slice(),
+                    expression.span,
+                    ArrayAccess::Read,
+                )
+                .map(|(ty, _)| ty),
             ExprKind::FuncCall(callee, arguments, _) => {
                 self.infer_call(callee, arguments.0.as_slice())
             }
@@ -739,6 +823,86 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn infer_dictionary(
+        &mut self,
+        items: &[DictItem],
+        expected: Option<&Ty>,
+        span: Span,
+    ) -> Result<Ty, String> {
+        let expected = expected.map(|ty| self.resolve(ty.clone()));
+        let expected_dictionary = expected.as_ref().and_then(|ty| match ty {
+            Ty::Dictionary { key, value } => Some((key.as_ref().clone(), value.as_ref().clone())),
+            _ => None,
+        });
+
+        let mut inferred_key: Option<Ty> = None;
+        let mut inferred_value: Option<Ty> = None;
+        for item in items {
+            match item {
+                DictItem::KeyValue(key, value) => {
+                    if let Some((expected_key, expected_value)) = &expected_dictionary {
+                        let actual_key = self.infer_expr(key, None)?;
+                        if first_var(expected_key).is_some() || first_var(&actual_key).is_some() {
+                            self.unify(expected_key.clone(), actual_key, key.span)?;
+                        } else {
+                            self.require_type(
+                                actual_key,
+                                expected_key,
+                                key.span,
+                                "dictionary key type mismatch",
+                            )?;
+                        }
+
+                        let actual_value = self.infer_expr(value, Some(expected_value))?;
+                        if first_var(expected_value).is_some() {
+                            self.unify(expected_value.clone(), actual_value, value.span)?;
+                        } else {
+                            self.require_type(
+                                actual_value,
+                                expected_value,
+                                value.span,
+                                "dictionary value type mismatch",
+                            )?;
+                        }
+                    } else {
+                        let key_type = self.infer_expr(key, None)?;
+                        let value_type = self.infer_expr(value, None)?;
+                        inferred_key = Some(match inferred_key {
+                            Some(previous) => common_type(previous, key_type),
+                            None => key_type,
+                        });
+                        inferred_value = Some(match inferred_value {
+                            Some(previous) => common_type(previous, value_type),
+                            None => value_type,
+                        });
+                    }
+                }
+                DictItem::Expansion(_) => return Ok(Ty::Unknown),
+            }
+        }
+
+        if let Some((key, value)) = expected_dictionary {
+            return Ok(Ty::Dictionary {
+                key: Box::new(self.resolve(key)),
+                value: Box::new(self.resolve(value)),
+            });
+        }
+
+        if items.is_empty() {
+            let dictionary = Ty::Dictionary {
+                key: Box::new(Ty::Var(self.new_var())),
+                value: Box::new(Ty::Var(self.new_var())),
+            };
+            self.empty_dictionaries.push((dictionary.clone(), span));
+            return Ok(dictionary);
+        }
+
+        Ok(Ty::Dictionary {
+            key: Box::new(inferred_key.unwrap_or(Ty::Unknown)),
+            value: Box::new(inferred_value.unwrap_or(Ty::Unknown)),
+        })
+    }
+
     fn infer_infix(
         &mut self,
         operator: Symbol,
@@ -820,7 +984,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Subscript(base, arguments) => {
-                let target = self.infer_subscript(
+                let (target, container) = self.infer_subscript(
                     base,
                     arguments.0.as_slice(),
                     place.span,
@@ -829,6 +993,12 @@ impl<'a> Checker<'a> {
                 if matches!(target, Ty::Unknown) {
                     self.infer_expr(value, None)?;
                     Ok(Ty::Unknown)
+                } else if container == IndexedContainer::Dictionary
+                    && first_var(&self.resolve(target.clone())).is_some()
+                {
+                    let actual = self.infer_expr(value, None)?;
+                    self.unify(target, actual, place.span)?;
+                    Ok(Ty::Void)
                 } else {
                     self.infer_expr(value, Some(&target))?;
                     Ok(Ty::Void)
@@ -881,15 +1051,16 @@ impl<'a> Checker<'a> {
         arguments: &[Argument],
         span: Span,
         access: ArrayAccess,
-    ) -> Result<Ty, String> {
-        let base_ty = self.infer_expr(base, None)?;
+    ) -> Result<(Ty, IndexedContainer), String> {
+        let inferred_base = self.infer_expr(base, None)?;
+        let base_ty = self.resolve(inferred_base);
         if matches!(base_ty, Ty::Unknown) {
             for argument in arguments {
                 if let Argument::Ordinal(expression) = argument {
                     self.infer_expr(expression, None)?;
                 }
             }
-            return Ok(Ty::Unknown);
+            return Ok((Ty::Unknown, IndexedContainer::Unknown));
         }
         if arguments.len() != 1 {
             for argument in arguments {
@@ -897,15 +1068,43 @@ impl<'a> Checker<'a> {
                     self.infer_expr(expression, None)?;
                 }
             }
-            return Ok(Ty::Unknown);
+            return Ok((Ty::Unknown, IndexedContainer::Unknown));
         }
         let Some(Argument::Ordinal(index)) = arguments.first() else {
-            return Ok(Ty::Unknown);
+            return Ok((Ty::Unknown, IndexedContainer::Unknown));
         };
         match base_ty {
             Ty::Array(element) => {
                 self.infer_expr(index, Some(&Ty::Int))?;
-                Ok(*element)
+                Ok((*element, IndexedContainer::Array))
+            }
+            Ty::Dictionary { key, value } => {
+                let index_type = self.infer_expr(index, None)?;
+                let key_type = self.resolve(*key);
+                if first_var(&key_type).is_some() || first_var(&index_type).is_some() {
+                    self.unify(key_type, index_type, index.span)?;
+                } else {
+                    self.require_type(
+                        index_type,
+                        &key_type,
+                        index.span,
+                        "dictionary key type mismatch",
+                    )?;
+                }
+                Ok((self.resolve(*value), IndexedContainer::Dictionary))
+            }
+            union @ Ty::Union(_) => {
+                let index_type = self.infer_expr(index, None)?;
+                let element = Ty::Var(self.new_var());
+                self.array_constraints.push(ArrayConstraint {
+                    array: union,
+                    element: element.clone(),
+                    span,
+                    context: "container subscript",
+                    index_type: Some(index_type),
+                    access,
+                });
+                Ok((element, IndexedContainer::Deferred))
             }
             array @ Ty::Var(_) => {
                 let index_type = self.infer_expr(index, None)?;
@@ -918,9 +1117,9 @@ impl<'a> Checker<'a> {
                     index_type: Some(index_type),
                     access,
                 });
-                Ok(element)
+                Ok((element, IndexedContainer::Deferred))
             }
-            Ty::Never => Ok(Ty::Never),
+            Ty::Never => Ok((Ty::Never, IndexedContainer::Deferred)),
             other => Err(format!(
                 "array subscript: expected array, got {other} at byte {}",
                 span.lo.0
@@ -1100,6 +1299,15 @@ impl<'a> Checker<'a> {
                 resolved
             }
             Ty::Array(element) => Ty::Array(Box::new(self.resolve_with_seen(*element, seen))),
+            Ty::Dictionary { key, value } => Ty::Dictionary {
+                key: Box::new(self.resolve_with_seen(*key, seen)),
+                value: Box::new(self.resolve_with_seen(*value, seen)),
+            },
+            Ty::Optional(inner) => Ty::Optional(Box::new(self.resolve_with_seen(*inner, seen))),
+            Ty::Reference { target, mutable } => Ty::Reference {
+                target: Box::new(self.resolve_with_seen(*target, seen)),
+                mutable,
+            },
             Ty::Function { params, ret } => Ty::Function {
                 params: params
                     .into_iter()
@@ -1164,6 +1372,9 @@ fn contains_var(ty: &Ty, needle: u32) -> bool {
     match ty {
         Ty::Var(id) => *id == needle,
         Ty::Array(element) => contains_var(element, needle),
+        Ty::Dictionary { key, value } => contains_var(key, needle) || contains_var(value, needle),
+        Ty::Optional(inner) => contains_var(inner, needle),
+        Ty::Reference { target, .. } => contains_var(target, needle),
         Ty::Function { params, ret } => {
             params.iter().any(|param| contains_var(param, needle)) || contains_var(ret, needle)
         }
@@ -1183,10 +1394,62 @@ fn remove_union_self_variable(ty: Ty, needle: u32) -> Ty {
     }
 }
 
+fn can_unify(left: &Ty, right: &Ty) -> bool {
+    if left == right || matches!(left, Ty::Var(_)) || matches!(right, Ty::Var(_)) {
+        return true;
+    }
+    match (left, right) {
+        (Ty::Array(left), Ty::Array(right)) => can_unify(left, right),
+        (
+            Ty::Dictionary {
+                key: left_key,
+                value: left_value,
+            },
+            Ty::Dictionary {
+                key: right_key,
+                value: right_value,
+            },
+        ) => can_unify(left_key, right_key) && can_unify(left_value, right_value),
+        (Ty::Optional(left), Ty::Optional(right)) => can_unify(left, right),
+        (_, Ty::Optional(inner)) => can_unify(left, inner),
+        (
+            Ty::Reference {
+                target: left,
+                mutable: left_mutable,
+            },
+            Ty::Reference {
+                target: right,
+                mutable: right_mutable,
+            },
+        ) => left_mutable == right_mutable && can_unify(left, right),
+        (
+            Ty::Function {
+                params: left_params,
+                ret: left_ret,
+            },
+            Ty::Function {
+                params: right_params,
+                ret: right_ret,
+            },
+        ) => {
+            left_params.len() == right_params.len()
+                && left_params
+                    .iter()
+                    .zip(right_params)
+                    .all(|(left, right)| can_unify(left, right))
+                && can_unify(left_ret, right_ret)
+        }
+        _ => false,
+    }
+}
+
 fn first_var(ty: &Ty) -> Option<u32> {
     match ty {
         Ty::Var(id) => Some(*id),
         Ty::Array(element) => first_var(element),
+        Ty::Dictionary { key, value } => first_var(key).or_else(|| first_var(value)),
+        Ty::Optional(inner) => first_var(inner),
+        Ty::Reference { target, .. } => first_var(target),
         Ty::Function { params, ret } => {
             params.iter().find_map(first_var).or_else(|| first_var(ret))
         }
@@ -1199,6 +1462,9 @@ fn contains_unknown(ty: &Ty) -> bool {
     match ty {
         Ty::Unknown => true,
         Ty::Array(element) => contains_unknown(element),
+        Ty::Dictionary { key, value } => contains_unknown(key) || contains_unknown(value),
+        Ty::Optional(inner) => contains_unknown(inner),
+        Ty::Reference { target, .. } => contains_unknown(target),
         Ty::Function { params, ret } => {
             params.iter().any(contains_unknown) || contains_unknown(ret)
         }
@@ -1486,6 +1752,35 @@ mod tests {
     #[test]
     fn unresolved_dictionary_subscript_preserves_dynamic_key_types() {
         check_source("func values() { return [\"key\": 1]; } print(values()[\"key\"]);").unwrap();
+    }
+
+    #[test]
+    fn optional_dictionary_values_accept_present_values_and_assignments() {
+        check_source("func take(d: int?[string]) {} take([\"k\": 1]);").unwrap();
+        check_source("func update(d: int?[string]) { d[\"k\"] = 1; }").unwrap();
+    }
+
+    #[test]
+    fn empty_dictionary_resolves_from_a_later_typed_use() {
+        check_source("func take(d: int[string]) {} let d = [:]; take(d);").unwrap();
+    }
+
+    #[test]
+    fn nested_empty_dictionary_resolves_from_later_writes() {
+        check_source(
+            "let mut d = [:]; d[\"k\"] = [:]; d[\"k\"][\"n\"] = 1; func take(value: int) {} take(d[\"k\"][\"n\"]);",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dictionary_union_returns_can_be_indexed() {
+        let error = check_source(
+            "func pick(flag: bool) { if flag { return [\"k\": 1]; } return [\"k\": \"v\"]; } func take(value: bool) {} take(pick(true)[\"k\"]);",
+        )
+        .unwrap_err();
+        assert!(error.contains("expected bool"), "{error}");
+        assert!(error.contains("got int | string"), "{error}");
     }
 
     #[test]

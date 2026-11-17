@@ -6,6 +6,9 @@ pub(crate) enum Ty {
     Int,
     String,
     Array(Box<Ty>),
+    Dictionary { key: Box<Ty>, value: Box<Ty> },
+    Optional(Box<Ty>),
+    Reference { target: Box<Ty>, mutable: bool },
     Function { params: Vec<Ty>, ret: Box<Ty> },
     Union(Vec<Ty>),
     Var(u32),
@@ -20,9 +23,18 @@ pub(crate) fn from_ast(ty: &xc_ast::ty::Type) -> Ty {
         TypeKind::Bool => Ty::Bool,
         TypeKind::Int(None, _, _) => Ty::Int,
         TypeKind::String => Ty::String,
+        TypeKind::Optional(inner) => Ty::Optional(Box::new(from_ast(inner))),
         TypeKind::Array(element) => match from_ast(element) {
             Ty::Unknown => Ty::Unknown,
             element => Ty::Array(Box::new(element)),
+        },
+        TypeKind::Dict(value, key) => Ty::Dictionary {
+            key: Box::new(from_ast(key)),
+            value: Box::new(from_ast(value)),
+        },
+        TypeKind::Reference(target, mutability) => Ty::Reference {
+            target: Box::new(from_ast(target)),
+            mutable: matches!(mutability, xc_ast::Mutability::Mut),
         },
         TypeKind::Paren(inner) => from_ast(inner),
         TypeKind::Fn(inputs, output) => match function_params(inputs) {
@@ -65,6 +77,21 @@ impl std::fmt::Display for Ty {
                 Ty::Union(_) | Ty::Function { .. } => write!(f, "({element})[]"),
                 _ => write!(f, "{element}[]"),
             },
+            Ty::Dictionary { key, value } => match value.as_ref() {
+                Ty::Union(_) | Ty::Function { .. } => write!(f, "({value})[{key}]"),
+                _ => write!(f, "{value}[{key}]"),
+            },
+            Ty::Optional(inner) => match inner.as_ref() {
+                Ty::Union(_) | Ty::Function { .. } => write!(f, "({inner})?"),
+                _ => write!(f, "{inner}?"),
+            },
+            Ty::Reference { target, mutable } => {
+                if *mutable {
+                    write!(f, "{target} mut&")
+                } else {
+                    write!(f, "{target}&")
+                }
+            }
             Ty::Function { params, ret } => {
                 f.write_str("(")?;
                 for (index, param) in params.iter().enumerate() {
@@ -108,6 +135,28 @@ pub(crate) fn is_subtype(a: &Ty, b: &Ty) -> bool {
         (Ty::Union(members), _) => members.iter().all(|member| is_subtype(member, b)),
         (_, Ty::Union(members)) => members.iter().any(|member| is_subtype(a, member)),
         (Ty::Array(left), Ty::Array(right)) => left == right,
+        (
+            Ty::Dictionary {
+                key: left_key,
+                value: left_value,
+            },
+            Ty::Dictionary {
+                key: right_key,
+                value: right_value,
+            },
+        ) => left_key == right_key && left_value == right_value,
+        (Ty::Optional(left), Ty::Optional(right)) => is_subtype(left, right),
+        (value, Ty::Optional(inner)) => is_subtype(value, inner),
+        (
+            Ty::Reference {
+                target: left_target,
+                mutable: left_mutable,
+            },
+            Ty::Reference {
+                target: right_target,
+                mutable: right_mutable,
+            },
+        ) => left_mutable == right_mutable && left_target == right_target,
         (
             Ty::Function {
                 params: left_params,

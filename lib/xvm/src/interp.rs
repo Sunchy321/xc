@@ -6,7 +6,7 @@
 //! `~` → CONCAT，`+` 对 string 无定义）；`EQ/NE` 为单条动态指令。类型检查器
 //! 落地后按静态类型分家。
 
-use xvalue::{write_value, Heap, ObjKind, ObjRef, TaskState, Value};
+use xvalue::{Heap, ObjKind, ObjRef, TaskState, Value, write_value};
 
 use crate::isa::Opcode;
 use crate::lower::Module;
@@ -135,11 +135,20 @@ enum FiberExit {
     /// 根帧返回（值在本域堆）。
     Finished(Value),
     /// AWAIT 挂起：等待的任务（所属域, 对象）与结果落点槽（本 fiber 栈的绝对下标）。
-    Parked { task_domain: usize, task: ObjRef, slot: usize },
+    Parked {
+        task_domain: usize,
+        task: ObjRef,
+        slot: usize,
+    },
     /// panic 传出到任务边界（payload 在本域堆）。
     Panicked(Value),
     /// spawn 请求：调度器建子域/任务对象，并把 spawner 置回队首继续。
-    SpawnRequested { closure: Value, func: u32, env: Vec<Value>, reg: u32 },
+    SpawnRequested {
+        closure: Value,
+        func: u32,
+        env: Vec<Value>,
+        reg: u32,
+    },
     /// 运行期错误（进程级，确定性终止）。
     Error(String),
 }
@@ -186,7 +195,9 @@ pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), Strin
                 let delivered = domains[wdomain].heap.copy_value(result);
                 let wf = &mut fibers[w.fiber];
                 if failed {
-                    let tf = domains[wdomain].heap.alloc(ObjKind::TaskFailure { payload: delivered });
+                    let tf = domains[wdomain]
+                        .heap
+                        .alloc(ObjKind::TaskFailure { payload: delivered });
                     wf.frames.last_mut().unwrap().err = Value::Obj(tf);
                 } else {
                     wf.stack[w.slot] = delivered;
@@ -232,8 +243,14 @@ pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), Strin
                 }
                 if let Some((owner, tref)) = domain.spawned_as {
                     deliver(
-                        &mut domains, &mut fibers, &mut ready, &mut waiting,
-                        owner, tref, root, false,
+                        &mut domains,
+                        &mut fibers,
+                        &mut ready,
+                        &mut waiting,
+                        owner,
+                        tref,
+                        root,
+                        false,
                     );
                 }
             }
@@ -244,14 +261,24 @@ pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), Strin
                 }
                 if let Some((owner, tref)) = domain.spawned_as {
                     deliver(
-                        &mut domains, &mut fibers, &mut ready, &mut waiting,
-                        owner, tref, payload, true,
+                        &mut domains,
+                        &mut fibers,
+                        &mut ready,
+                        &mut waiting,
+                        owner,
+                        tref,
+                        payload,
+                        true,
                     );
                 } else {
                     return Err(panic_message(&Some(payload)));
                 }
             }
-            FiberExit::Parked { task_domain, task, slot } => {
+            FiberExit::Parked {
+                task_domain,
+                task,
+                slot,
+            } => {
                 fibers[fid].state = FiberState::Waiting;
                 waiting.push(Waiting {
                     fiber: fid,
@@ -260,7 +287,12 @@ pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), Strin
                     slot,
                 });
             }
-            FiberExit::SpawnRequested { closure, func, env, reg } => {
+            FiberExit::SpawnRequested {
+                closure,
+                func,
+                env,
+                reg,
+            } => {
                 let parent_d = fibers[fid].domain;
                 let child_d = domains.len();
                 // 任务对象先在父域堆分配（此时 child_d 已知）。
@@ -278,8 +310,7 @@ pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), Strin
                     .iter()
                     .map(|v| child.heap.copy_value(*v))
                     .collect();
-                let env2: Vec<Value> =
-                    env.iter().map(|v| child.heap.copy_value(*v)).collect();
+                let env2: Vec<Value> = env.iter().map(|v| child.heap.copy_value(*v)).collect();
                 let regs = module.funcs[func as usize].regs as usize;
                 domains.push(child);
                 let child_fid = fibers.len();
@@ -360,8 +391,7 @@ fn exec_fiber(
         if !heap.should_collect() {
             return;
         }
-        let mut root_vecs: Vec<Vec<Value>> =
-            vec![stack.to_vec(), slots.to_vec()];
+        let mut root_vecs: Vec<Vec<Value>> = vec![stack.to_vec(), slots.to_vec()];
         for fr in frames {
             root_vecs.push(fr.env.clone());
             root_vecs.push(vec![fr.err, fr.ret_val]);
@@ -443,8 +473,7 @@ fn exec_fiber(
                     _ => rt!("internal: GETSLOTCELL on a non-cell slot"),
                 }
             }
-            Opcode::AddI64 | Opcode::SubI64 | Opcode::MulI64 | Opcode::DivI64
-            | Opcode::ModI64 => {
+            Opcode::AddI64 | Opcode::SubI64 | Opcode::MulI64 | Opcode::DivI64 | Opcode::ModI64 => {
                 let (dst, l, r) = (
                     base + instr.a() as usize,
                     stack[base + instr.b() as usize],
@@ -472,14 +501,10 @@ fn exec_fiber(
                     }
                 };
                 stack[dst] = match (l, r) {
-                    (Value::Int(a), Value::Int(b)) => {
-                        Value::Int(
-                            match arith(a, b) {
-                                Ok(v) => v,
-                                Err(m) => rt!(m),
-                            },
-                        )
-                    }
+                    (Value::Int(a), Value::Int(b)) => Value::Int(match arith(a, b) {
+                        Ok(v) => v,
+                        Err(m) => rt!(m),
+                    }),
                     // `+` 仅整数；字符串拼接是 `~`（CONCAT），`+` 对 string 无定义。
                     _ => rt!("arithmetic operands must be int"),
                 };
@@ -528,9 +553,11 @@ fn exec_fiber(
                     stack[base + instr.c() as usize],
                 );
                 stack[dst] = match (l, r) {
-                    (Value::Int(a), Value::Int(b)) => {
-                        Value::Bool(if instr.op() == Opcode::Lt { a < b } else { a <= b })
-                    }
+                    (Value::Int(a), Value::Int(b)) => Value::Bool(if instr.op() == Opcode::Lt {
+                        a < b
+                    } else {
+                        a <= b
+                    }),
                     _ => rt!("ordering operands must be int"),
                 };
             }
@@ -558,7 +585,8 @@ fn exec_fiber(
             }
             Opcode::NewArr => {
                 maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
-                let (dst, base_i, count) = (instr.a() as usize, instr.b() as usize, instr.c() as usize);
+                let (dst, base_i, count) =
+                    (instr.a() as usize, instr.b() as usize, instr.c() as usize);
                 let elems = stack[base + base_i..base + base_i + count].to_vec();
                 let o = heap.alloc(ObjKind::Arr(elems));
                 stack[base + dst] = Value::Obj(o);
@@ -607,26 +635,25 @@ fn exec_fiber(
                                 _ => rt!("array index must be int"),
                             };
                             if i < 0 || i as usize >= a.len() {
-                                rt!(format!(
-                                    "array index {i} out of bounds (len {})",
-                                    a.len()
-                                ));
+                                rt!(format!("array index {i} out of bounds (len {})", a.len()));
                             }
                             stack[dst] = a[i as usize];
                         }
-                        ObjKind::Dict(d) => {
-                            match d.iter().find(|(k, _)| *k == idx) {
-                                Some((_, v)) => stack[dst] = *v,
-                                None => rt!(format!(
-                                    "missing key: {}",
-                                    {
-                                        let mut s = String::new();
-                                        let _ = write_value(&idx, &mut s);
-                                        s
-                                    }
-                                )),
+                        ObjKind::Dict(d) => match d.iter().find(|(k, _)| *k == idx) {
+                            Some((_, v)) => stack[dst] = *v,
+                            None => {
+                                let mut key = String::new();
+                                let _ = write_value(&idx, &mut key);
+                                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
+                                let payload = Value::Obj(
+                                    heap.alloc(ObjKind::Str(format!("missing key: {key}").into())),
+                                );
+                                if let Some(exit) = begin_panic(frames, stack, fiber_panic, payload)
+                                {
+                                    return exit;
+                                }
                             }
-                        }
+                        },
                         _ => rt!("subscript on a non-container"),
                     },
                     _ => rt!("subscript on a non-container"),
@@ -646,10 +673,7 @@ fn exec_fiber(
                                 _ => rt!("array index must be int"),
                             };
                             if i < 0 || i as usize >= a.len() {
-                                rt!(format!(
-                                    "array index {i} out of bounds (len {})",
-                                    a.len()
-                                ));
+                                rt!(format!("array index {i} out of bounds (len {})", a.len()));
                             }
                             a[i as usize] = v;
                         }
@@ -774,25 +798,12 @@ fn exec_fiber(
             }
             Opcode::Panic => {
                 let payload = stack[base + instr.a() as usize];
-                if fiber_panic.is_some() {
-                    return FiberExit::Error("panic during panic".to_string());
-                }
-                *fiber_panic = Some(payload);
-                let f = frames.last_mut().unwrap();
-                if !f.defers.is_empty() {
-                    f.walk = Walk::Panic;
-                    f.walk_remaining = f.defers.len();
-                    f.ip = *f.defers.last().unwrap();
-                } else {
-                    return FiberExit::Panicked((*fiber_panic).unwrap_or(Value::Nil));
+                if let Some(exit) = begin_panic(frames, stack, fiber_panic, payload) {
+                    return exit;
                 }
             }
             Opcode::Defer => {
-                frames
-                    .last_mut()
-                    .unwrap()
-                    .defers
-                    .push(instr.bx() as u32);
+                frames.last_mut().unwrap().defers.push(instr.bx() as u32);
             }
             Opcode::EndDefer => {
                 // 清理体完成：弹出其记录（未弹出的留在栈上供链式进入）。
@@ -838,11 +849,12 @@ fn exec_fiber(
                     }
                     Walk::Panic => {
                         let remaining = remaining - 1;
+                        frames.last_mut().unwrap().walk_remaining = remaining;
                         if remaining > 0 {
                             let f = frames.last_mut().unwrap();
                             let next = *f.defers.last().unwrap();
                             f.ip = next;
-                        } else {
+                        } else if run_continue_panic(frames, stack) {
                             return FiberExit::Panicked((*fiber_panic).unwrap_or(Value::Nil));
                         }
                     }
@@ -1052,7 +1064,12 @@ fn exec_fiber(
                     },
                     _ => unreachable!(),
                 };
-                return FiberExit::SpawnRequested { closure, func, env, reg: instr.a() };
+                return FiberExit::SpawnRequested {
+                    closure,
+                    func,
+                    env,
+                    reg: instr.a(),
+                };
             }
             Opcode::Await => {
                 let v = stack[base + instr.a() as usize];
@@ -1090,10 +1107,7 @@ fn deref_ref(r: Value) -> Result<Value, String> {
             ObjKind::ElemRef { arr, idx } => match arr.as_arr() {
                 Some(a) => {
                     if *idx < 0 || *idx as usize >= a.len() {
-                        Err(format!(
-                            "array index {idx} out of bounds (len {})",
-                            a.len()
-                        ))
+                        Err(format!("array index {idx} out of bounds (len {})", a.len()))
                     } else {
                         Ok(a[*idx as usize])
                     }
@@ -1120,10 +1134,7 @@ fn store_ref(r: Value, v: Value) -> Result<(), String> {
             ObjKind::ElemRef { arr, idx } => match arr.as_arr_mut() {
                 Some(a) => {
                     if *idx < 0 || *idx as usize >= a.len() {
-                        Err(format!(
-                            "array index {idx} out of bounds (len {})",
-                            a.len()
-                        ))
+                        Err(format!("array index {idx} out of bounds (len {})", a.len()))
                     } else {
                         a[*idx as usize] = v;
                         Ok(())
@@ -1138,19 +1149,56 @@ fn store_ref(r: Value, v: Value) -> Result<(), String> {
 }
 
 /// PANIC 展开的「弹到下一个带 defer 的帧」步进。返回 true = 已无帧（进程失败）。
-fn run_continue_panic(frames: &mut Vec<Frame>, payload: &Option<Value>, out: &mut String) -> bool {
+fn begin_panic(
+    frames: &mut Vec<Frame>,
+    stack: &mut Vec<Value>,
+    fiber_panic: &mut Option<Value>,
+    payload: Value,
+) -> Option<FiberExit> {
+    if fiber_panic.is_some() {
+        return Some(FiberExit::Error("panic during panic".to_string()));
+    }
+
+    *fiber_panic = Some(payload);
+    if frames
+        .last()
+        .expect("panic requires an executing frame")
+        .defers
+        .is_empty()
+    {
+        if run_continue_panic(frames, stack) {
+            Some(FiberExit::Panicked(payload))
+        } else {
+            None
+        }
+    } else {
+        let frame = frames.last_mut().unwrap();
+        frame.walk = Walk::Panic;
+        frame.walk_remaining = frame.defers.len();
+        frame.ip = *frame.defers.last().unwrap();
+        None
+    }
+}
+
+fn run_continue_panic(frames: &mut Vec<Frame>, stack: &mut Vec<Value>) -> bool {
     loop {
         frames.pop();
         match frames.last_mut() {
             None => return true,
             Some(c) if !c.defers.is_empty() => {
+                if stack.len() > c.restore {
+                    stack.truncate(c.restore);
+                }
                 c.walk = Walk::Panic;
                 c.walk_remaining = c.defers.len();
                 c.ip = *c.defers.last().unwrap();
-                let _ = out;
                 return false;
             }
-            Some(_) => {}
+            Some(c) => {
+                if stack.len() > c.restore {
+                    stack.truncate(c.restore);
+                }
+            }
         }
     }
 }
