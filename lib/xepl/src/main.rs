@@ -1,26 +1,23 @@
-mod eval;
-mod store;
-mod r#type;
-mod value;
+//! xepl：X 会话 REPL（M5 重建）。
+//!
+//! 旧的树遍历求值器（eval/store）已退役：每行输入并入会话转录，
+//! 整个转录经统一管线（parse → check → lower → verify → xvm）重跑，
+//! 只显示输出增量——正确性由「与文件执行同一条管线」构造性保证。
+//! 会话状态 = 转录中的顶层绑定（重声明覆盖旧槽，语义与脚本一致）。
 
 use std::borrow::Cow;
 use std::io::Write;
 
-use eval::eval;
 use rustyline::config::Config;
 use rustyline::highlight::Highlighter;
 use rustyline::history::DefaultHistory;
 use rustyline::{Completer, Editor, Helper, Hinter, Validator};
-use store::Store;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-use value::println_value;
-use xc_ast::decl::DeclKind;
 use xc_lexer::cursor::Cursor;
 use xc_lexer::{LiteralKind, TokenKind};
-use xc_parse::parser_from_source_str;
-use xc_parse::session::ParseSession;
 use xc_span::create_session_globals_then;
 use xc_span::source_map::Filename;
+use xvalue::write_value;
 
 fn create_spec(color: Color) -> ColorSpec {
     let mut spec = ColorSpec::new();
@@ -28,6 +25,7 @@ fn create_spec(color: Color) -> ColorSpec {
     spec.set_bold(true);
     spec
 }
+
 
 #[derive(Completer, Helper, Hinter, Validator)]
 struct ReplHelper;
@@ -141,12 +139,11 @@ fn highlight_x(input: &str) -> Cow<'_, str> {
     Cow::Owned(result)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let hint = create_spec(Color::Ansi256(8));
-    let error = create_spec(Color::Red);
 
-    let session = ParseSession::new();
-    let mut store = Store::new();
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let error = create_spec(Color::Red);
+    let hint = create_spec(Color::Ansi256(8));
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
 
     let config = Config::default();
@@ -154,70 +151,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rl = Editor::<ReplHelper, DefaultHistory>::with_config(config)?;
     rl.set_helper(Some(h));
 
-    create_session_globals_then::<Result<(), Box<dyn std::error::Error>>>(|| loop {
-        let line = match rl.readline("> ") {
-            Ok(line) => line,
-            Err(_) => return Ok(()),
-        };
+    create_session_globals_then::<Result<(), Box<dyn std::error::Error>>>(|| {
+        // 会话转录：被接受的行；每次新输入后整体重跑，取输出增量。
+        let mut lines: Vec<String> = Vec::new();
+        let mut prev_out = String::new();
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed == ":q" || trimmed == ":quit" {
-            return Ok(());
-        }
+        loop {
+            let line = match rl.readline("> ") {
+                Ok(line) => line,
+                Err(_) => return Ok(()),
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed == ":q" || trimmed == ":quit" {
+                return Ok(());
+            }
 
-        let name = Filename::Repl;
+            // 归一化：块/声明结尾不加分号，其余行补 `;`（多行转录拼接需要）。
+            let mut normalized = trimmed.to_string();
+            if !trimmed.ends_with(';')
+                && !trimmed.ends_with('}')
+                && !trimmed.ends_with('{')
+            {
+                normalized.push(';');
+            }
+            lines.push(normalized);
+            let source = lines.join("\n");
 
-        // Handle function definitions
-        if trimmed.starts_with("func ") {
-            let mut parser = parser_from_source_str(&session, name, trimmed.to_string());
-            match parser.parse_decl() {
-                Ok(Some(decl)) => {
-                    if let DeclKind::Func(func) = &decl.kind {
-                        let fname = func.ident.name;
-                        store.add_func(func.clone());
+            // 外层 create_session_globals_then 已提供会话；符号 intern 跨行稳定。
+            let result = (|| {
+                let parsed = xc_check::parse_program(Filename::Repl, &source)?;
+                let program = xc_check::check(parsed)?;
+                let module = xvm::compile(&program)?;
+                xvm::run_value(&module, &source)
+            })();
+
+            match result {
+                Ok((out, value)) => {
+                    // 输出增量（先前各行的 print 不重复回显）。
+                    if out.len() > prev_out.len() && out.starts_with(&prev_out) {
+                        print!("{}", &out[prev_out.len()..]);
+                    } else if out != prev_out {
+                        print!("{out}");
+                    }
+                    prev_out = out;
+                    // 值回显：最后一条语句的值（let/defer 等为 Nil/Void 不回显）。
+                    // 声明行（func…）不产生顶层语句，回显会滞留旧值——跳过。
+                    let is_decl = trimmed.starts_with("func ");
+                    if !is_decl && !matches!(value, xvalue::Value::Nil | xvalue::Value::Void) {
+                        let mut s = String::new();
+                        let _ = write_value(&value, &mut s);
                         stdout.set_color(&hint)?;
-                        writeln!(stdout, "<function {}>", fname.as_str())?;
+                        writeln!(stdout, "= {s}")?;
                         stdout.reset()?;
                     }
+                    let _ = stdout.flush();
                 }
-                Err(_) => {
+                Err(msg) => {
+                    lines.pop(); // 拒绝该行，会话保持原状
                     stdout.set_color(&error)?;
-                    writeln!(stdout, "Error while parsing function!")?;
+                    writeln!(stdout, "{msg}")?;
                     stdout.reset()?;
                 }
-                _ => {}
             }
-            continue;
         }
-
-        // Wrap input in { } to support both expressions and statements
-        let source = format!("{{ {} }}", trimmed);
-
-        let mut parser = parser_from_source_str(&session, name, source);
-
-        let expr = match parser.parse_expr() {
-            Ok(expr) => expr,
-            Err(_) => {
-                stdout.set_color(&error)?;
-                writeln!(stdout, "Error while parsing!")?;
-                stdout.reset()?;
-                continue;
-            }
-        };
-
-        let result = match eval(&*expr, &mut store) {
-            Ok(result) => result,
-            Err(err) => {
-                stdout.set_color(&error)?;
-                writeln!(stdout, "Error while evaluating: {}", err)?;
-                stdout.reset()?;
-                continue;
-            }
-        };
-
-        println_value(result, &mut stdout, &hint)?;
     })
 }

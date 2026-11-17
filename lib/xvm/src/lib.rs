@@ -10,7 +10,7 @@ mod verify;
 
 use xc_check::Program;
 
-pub use interp::run;
+pub use interp::{run, run_value};
 pub use isa::{dump_module, Instr, Opcode};
 pub use lower::{FuncProto, Module};
 

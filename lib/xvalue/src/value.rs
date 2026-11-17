@@ -39,6 +39,13 @@ impl Value {
         i64::from_str_radix(s, radix).map_err(|_| format!("invalid integer literal: {s}"))
     }
 
+    pub fn as_obj(self) -> Option<crate::heap::ObjRef> {
+        match self {
+            Value::Obj(o) => Some(o),
+            _ => None,
+        }
+    }
+
     pub fn from_string_lit(lit: &Literal) -> Option<&str> {
         match &lit.kind {
             LiteralKind::String => Some(lit.value.as_str()),
@@ -71,6 +78,12 @@ impl PartialEq for Value {
             (Value::Obj(a), Value::Obj(b)) => match (a.kind(), b.kind()) {
                 (crate::heap::ObjKind::Str(x), crate::heap::ObjKind::Str(y)) => x == y,
                 (crate::heap::ObjKind::Arr(x), crate::heap::ObjKind::Arr(y)) => x == y,
+                (crate::heap::ObjKind::Dict(x), crate::heap::ObjKind::Dict(y)) => {
+                    x.len() == y.len()
+                        && x.iter().all(|(k, v)| {
+                            y.iter().any(|(k2, v2)| k == k2 && v == v2)
+                        })
+                }
                 // cell/闭包：按 place/对象恒等比较（引用恒等语义）。
                 (x, y) => a == b && std::mem::discriminant(x) == std::mem::discriminant(y),
             },
@@ -103,6 +116,20 @@ pub fn write_value(v: &Value, out: &mut impl fmt::Write) -> fmt::Result {
             crate::heap::ObjKind::Cell(inner) => write_value(inner, out),
             crate::heap::ObjKind::ElemRef { .. } => write!(out, "<&elem>"),
             crate::heap::ObjKind::Closure { .. } => write!(out, "<func>"),
+            crate::heap::ObjKind::Dict(pairs) => {
+                write!(out, "{{")?;
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        write!(out, ", ")?;
+                    }
+                    write_value(k, out)?;
+                    write!(out, ": ")?;
+                    write_value(v, out)?;
+                }
+                write!(out, "}}")
+            }
+            crate::heap::ObjKind::Task(_) => write!(out, "<task>"),
+            crate::heap::ObjKind::TaskFailure { payload } => write_value(payload, out),
         },
     }
 }

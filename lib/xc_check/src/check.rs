@@ -188,11 +188,24 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
     use ExprKind::*;
     match &e.kind {
         Placeholder | This | SelfExpr | MacroCall(..) | Caret | Dollar | LambdaArgOrdinal(_)
-        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Dict(_) | Match(..)
+        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Match(..)
         | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
-        | MemberDynamicAccess(..) | MethodCall(..) | Cast(..) | Await(..)
+        | MemberDynamicAccess(..) | MethodCall(..) | Cast(..)
         | Let(..) => {
             Err(format!("unsupported expression in this build: {e:?}"))
+        }
+        Await(e) => check_expr(e, program),
+        Dict(items) => {
+            for item in items {
+                match item {
+                    xc_ast::expr::DictItem::KeyValue(k, v) => {
+                        check_expr(k, program)?;
+                        check_expr(v, program)?;
+                    }
+                    _ => return Err("expansion in dict literal not supported".to_string()),
+                }
+            }
+            Ok(())
         }
         Lambda(l) => match &l.body {
             FuncBody::Block(b) => check_block(b, program),
@@ -293,7 +306,9 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
             if let ExprKind::Path(p) = &callee.kind {
                 if p.segments.len() == 1 {
                     let name = p.segments[0].ident.name;
-                    if name.as_str() == "print" || name.as_str() == "panic" {
+                    if name.as_str() == "print" || name.as_str() == "panic"
+                        || name.as_str() == "spawn"
+                    {
                         for arg in &args.0 {
                             if let Argument::Ordinal(e) = arg {
                                 check_expr(e, program)?;

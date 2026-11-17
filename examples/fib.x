@@ -5,7 +5,7 @@ func fib(n: int) {
     return fib(n - 1) + fib(n - 2);
 }
 
-let i = 0;
+let mut i = 0;
 while i <= 10 {
     print(fib(i));
     i = i + 1;

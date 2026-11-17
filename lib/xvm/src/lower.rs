@@ -74,7 +74,11 @@ pub fn compile(program: &Program) -> Result<Module, String> {
     // 顶层先降级：槽表随之完整，之后函数体引用全局无需顺序检查。
     let promoted = scan_promoted_stmts(&program.top);
     let mut st = FnState::new(promoted, None);
-    lw.compile_stmts(&mut st, &program.top, true)?;
+    // 约定 D：返回值经 r0 传回——顶层收尾同样把块值移入 r0（REPL 值回显依赖它）。
+    let vr = lw.compile_stmts(&mut st, &program.top, true)?;
+    if vr != 0 {
+        lw.emit(&mut st, Instr::abc(Opcode::Move, 0, vr, 0), 0);
+    }
     lw.emit(&mut st, Instr::abc(Opcode::Ret, 0, 0, 0), 0);
     lw.funcs.push(st.finish("<top>".to_string(), 0));
 
@@ -133,6 +137,8 @@ struct LocalInfo {
     is_mut: bool,
     ref_mut: bool,
     cell: bool,
+    /// 被 spawn 移动捕获后失效（后续使用报错）。
+    moved: bool,
 }
 
 /// upval 槽：捕获来源 + 沿捕获链继承的权限位。
@@ -141,6 +147,7 @@ struct UpvalInfo {
     src: CapSrc,
     is_mut: bool,
     ref_mut: bool,
+    moved: bool,
 }
 
 struct FnState {
@@ -261,6 +268,7 @@ impl<'p> Lower<'p> {
             is_mut,
             ref_mut,
             cell: st.promoted.contains(&name),
+            moved: false,
         };
         if let Some(entry) = st.locals.iter_mut().rev().find(|(n, _)| *n == name) {
             entry.1 = info;
@@ -277,6 +285,13 @@ impl<'p> Lower<'p> {
             self.temp(st)?;
         }
         Ok(())
+    }
+
+    fn upval_moved(st: &FnState, i: u32) -> bool {
+        st.upvals
+            .get(i as usize)
+            .map(|(_, info)| info.moved)
+            .unwrap_or(false)
     }
 
     fn konst(&mut self, v: Value) -> Result<u16, String> {
@@ -354,14 +369,15 @@ impl<'p> Lower<'p> {
                         src: CapSrc::Reg(info.reg),
                         is_mut: info.is_mut,
                         ref_mut: info.ref_mut,
+                        moved: info.moved,
                     },
                 ));
                 return Some(Resolved::Upval((st.upvals.len() - 1) as u32));
             }
             if let Some(i) = ctx.upvals.iter().position(|(n, _)| *n == name) {
-                let (src, is_mut, ref_mut) = {
+                let (src, is_mut, ref_mut, moved) = {
                     let (_, u) = &ctx.upvals[i];
-                    (u.src, u.is_mut, u.ref_mut)
+                    (u.src, u.is_mut, u.ref_mut, u.moved)
                 };
                 st.upvals.push((
                     name,
@@ -369,6 +385,7 @@ impl<'p> Lower<'p> {
                         src,
                         is_mut,
                         ref_mut,
+                        moved,
                     },
                 ));
                 return Some(Resolved::Upval((st.upvals.len() - 1) as u32));
@@ -390,6 +407,9 @@ impl<'p> Lower<'p> {
                 let rd = self.temp(st)?;
                 self.emit(st, Instr::abc(Opcode::GetCell, rd, reg, 0), pos);
                 Ok(rd)
+            }
+            Some(Resolved::Upval(i)) if Self::upval_moved(st, i as u32) => {
+                Err(format!("use of moved variable `{}`", name.as_str()))
             }
             Some(Resolved::Upval(i)) => {
                 let rd = self.temp(st)?;
@@ -706,6 +726,24 @@ impl<'p> Lower<'p> {
                 self.emit(st, Instr::abc(Opcode::NewArr, base, base, count), pos);
                 Ok(base)
             }
+            ExprKind::Dict(items) => {
+                // NEWDICT 键值交错布局：k0 v0 k1 v1 …
+                let base = self.temp(st)?;
+                let mut pairs = 0u32;
+                for item in items {
+                    match item {
+                        xc_ast::expr::DictItem::KeyValue(k, v) => {
+                            self.ensure_reg(st, base + pairs * 2 + 1)?;
+                            self.compile_into(st, base + pairs * 2, k, is_top)?;
+                            self.compile_into(st, base + pairs * 2 + 1, v, is_top)?;
+                            pairs += 1;
+                        }
+                        _ => return Err("expansion in dict literal not supported".to_string()),
+                    }
+                }
+                self.emit(st, Instr::abc(Opcode::NewDict, base, base, pairs), pos);
+                Ok(base)
+            }
             ExprKind::Subscript(base_e, args) => {
                 let rb = self.compile_expr(st, base_e, is_top)?;
                 if args.0.len() != 1 {
@@ -721,7 +759,14 @@ impl<'p> Lower<'p> {
                 self.emit(st, Instr::abc(Opcode::GetElem, rd, rb, ri), pos);
                 Ok(rd)
             }
-            ExprKind::Lambda(l) => self.compile_lambda(st, l, pos),
+            ExprKind::Await(inner) => {
+                let r = self.compile_expr(st, inner, is_top)?;
+                self.emit(st, Instr::abc(Opcode::Await, r, 0, 0), pos);
+                // 失败交付经 er：try 区域内补 JMPERR（与调用点同款）。
+                self.emit_try_check(st, pos);
+                Ok(r)
+            }
+            ExprKind::Lambda(l) => self.compile_lambda(st, l, pos, false),
             ExprKind::Throw(v) => {
                 if st.in_defer {
                     return Err("throw inside defer is not supported yet".to_string());
@@ -1028,6 +1073,23 @@ impl<'p> Lower<'p> {
                         }
                     }
                 }
+                if name.as_str() == "spawn" {
+                    // spawn(closure)：实参必须是 do 闭包字面量，隐式全移动捕获，
+                    // 源绑定随即失效（隔离模型：进入任务的捕获不允许共享）。
+                    if count != 1 {
+                        return Err("spawn takes exactly one closure".to_string());
+                    }
+                    let lam = match &args.0.first().and_then(|a| match a {
+                        Argument::Ordinal(e) => Some(e),
+                        _ => None,
+                    }).map(|e| &e.kind) {
+                        Some(ExprKind::Lambda(l)) => l,
+                        _ => return Err("spawn requires a do closure literal".to_string()),
+                    };
+                    let rd = self.compile_lambda(st, lam, pos, true)?;
+                    self.emit(st, Instr::abc(Opcode::Spawn, rd, 0, 0), pos);
+                    return Ok(rd);
+                }
                 if name.as_str() == "print" {
                     let ra = self.temp(st)?;
                     let mut k = 0u32;
@@ -1164,6 +1226,24 @@ impl<'p> Lower<'p> {
                 self.emit(st, Instr::abc(Opcode::StoreRef, v, rref, 0), pos);
                 Ok(v)
             }
+            ExprKind::Dict(items) => {
+                // NEWDICT 键值交错布局：k0 v0 k1 v1 …
+                let base = self.temp(st)?;
+                let mut pairs = 0u32;
+                for item in items {
+                    match item {
+                        xc_ast::expr::DictItem::KeyValue(k, v) => {
+                            self.ensure_reg(st, base + pairs * 2 + 1)?;
+                            self.compile_into(st, base + pairs * 2, k, is_top)?;
+                            self.compile_into(st, base + pairs * 2 + 1, v, is_top)?;
+                            pairs += 1;
+                        }
+                        _ => return Err("expansion in dict literal not supported".to_string()),
+                    }
+                }
+                self.emit(st, Instr::abc(Opcode::NewDict, base, base, pairs), pos);
+                Ok(base)
+            }
             ExprKind::Subscript(base_e, args) => {
                 if args.0.len() != 1 {
                     return Err("subscript assignment requires exactly one index".to_string());
@@ -1269,7 +1349,25 @@ impl<'p> Lower<'p> {
                         None => Err(format!("undefined variable: {}", name.as_str())),
                     }
                 }
-                ExprKind::Subscript(base_e, args) => {
+                ExprKind::Dict(items) => {
+                // NEWDICT 键值交错布局：k0 v0 k1 v1 …
+                let base = self.temp(st)?;
+                let mut pairs = 0u32;
+                for item in items {
+                    match item {
+                        xc_ast::expr::DictItem::KeyValue(k, v) => {
+                            self.ensure_reg(st, base + pairs * 2 + 1)?;
+                            self.compile_into(st, base + pairs * 2, k, is_top)?;
+                            self.compile_into(st, base + pairs * 2 + 1, v, is_top)?;
+                            pairs += 1;
+                        }
+                        _ => return Err("expansion in dict literal not supported".to_string()),
+                    }
+                }
+                self.emit(st, Instr::abc(Opcode::NewDict, base, base, pairs), pos);
+                Ok(base)
+            }
+            ExprKind::Subscript(base_e, args) => {
                     // &a[i]：投影操作数在此求值一次并捕获；越界即错误值。
                     if args.0.len() != 1 {
                         return Err("subscript requires exactly one index".to_string());
@@ -1338,6 +1436,7 @@ impl<'p> Lower<'p> {
         st: &mut FnState,
         l: &xc_ast::lambda::Lambda,
         pos: u32,
+        force_move: bool,
     ) -> Result<u32, String> {
         let mut cst = FnState::new(
             st.promoted.clone(),
@@ -1365,15 +1464,41 @@ impl<'p> Lower<'p> {
                             src: CapSrc::Reg(info.reg),
                             is_mut: info.is_mut,
                             ref_mut: info.ref_mut,
+                            moved: info.moved,
                         },
                     ));
+                    if force_move {
+                        // 移动捕获 = 快照 cell（源为升格 cell 先取其值），源失效。
+                        let tv = self.temp(st)?;
+                        if info.cell {
+                            self.emit(st, Instr::abc(Opcode::GetCell, tv, info.reg, 0), pos);
+                        } else if tv != info.reg {
+                            self.emit(st, Instr::abc(Opcode::Move, tv, info.reg, 0), pos);
+                        }
+                        let cap = self.temp(st)?;
+                        self.emit(st, Instr::abc(Opcode::AllocCell, cap, tv, 0), pos);
+                        cst.upvals.push((
+                            name,
+                            UpvalInfo {
+                                src: CapSrc::Reg(cap),
+                                is_mut: info.is_mut,
+                                ref_mut: info.ref_mut,
+                                moved: true,
+                            },
+                        ));
+                        if let Some(entry) =
+                            st.locals.iter_mut().rev().find(|(n, _)| *n == name)
+                        {
+                            entry.1.moved = true;
+                        }
+                    }
                 }
                 Some(Resolved::Upval(i)) => {
                     // 经外层 lambda 转发：改写为 ParentUpval（外层 upval 槽），
                     // 原样继承会把外层创建帧的寄存器号错当成本层创建帧的。
-                    let (is_mut, ref_mut) = {
+                    let (is_mut, ref_mut, moved) = {
                         let u = &st.upvals[i as usize].1;
-                        (u.is_mut, u.ref_mut)
+                        (u.is_mut, u.ref_mut, u.moved)
                     };
                     cst.upvals.push((
                         name,
@@ -1381,6 +1506,7 @@ impl<'p> Lower<'p> {
                             src: CapSrc::ParentUpval(i),
                             is_mut,
                             ref_mut,
+                            moved,
                         },
                     ));
                 }
@@ -1714,6 +1840,7 @@ mod tests {
             let ops: Vec<Opcode> = m.funcs[0].code.iter().map(|i| i.op()).collect();
             // 运算 dst 用新临时寄存器（ISA 规则：dst 永不覆盖局部/参数）；
             // compile_into 暂走「临时寄存器 + MOVE」慢路径（M6 做字面量直写）。
+            // 顶层收尾把块值移入 r0（约定 D，REPL 值回显依赖）。
             assert_eq!(
                 ops,
                 vec![
@@ -1721,6 +1848,7 @@ mod tests {
                     Opcode::LoadI,
                     Opcode::Move,
                     Opcode::AddI64,
+                    Opcode::Move,
                     Opcode::Ret
                 ]
             );

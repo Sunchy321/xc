@@ -77,7 +77,7 @@ pub fn verify(m: &Module) -> Result<(), String> {
                         return bad("register out of range".to_string());
                     }
                 }
-                Opcode::Raise | Opcode::Panic => {
+                Opcode::Spawn | Opcode::Await | Opcode::Raise | Opcode::Panic => {
                     if !reg(instr.a()) {
                         return bad("register out of range".to_string());
                     }
@@ -140,6 +140,12 @@ pub fn verify(m: &Module) -> Result<(), String> {
                 Opcode::NewArr => {
                     let (base, count) = (instr.b() as usize, instr.c() as usize);
                     if !reg(instr.a()) || base + count > f.regs as usize {
+                        return bad("register out of range".to_string());
+                    }
+                }
+                Opcode::NewDict => {
+                    let (base, pairs) = (instr.b() as usize, instr.c() as usize);
+                    if !reg(instr.a()) || base + pairs * 2 > f.regs as usize {
                         return bad("register out of range".to_string());
                     }
                 }

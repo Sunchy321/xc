@@ -1,11 +1,12 @@
-//! 解释器：单一值栈 + 帧窗口（M0 单 fiber；fiber/事件循环为 M4）。
-//! 错误消息与旧栈式原型逐字兼容（`xc_driver/tests/golden.rs` 为基线）。
+//! 解释器：域 × fiber 调度器（M4）。每任务域 = 独立堆 + 槽位快照 + fiber；
+//! spawn 开新域（无共享内存，捕获/结果经深拷贝转移）；await 挂起当前 fiber，
+//! 就绪队列 FIFO 确定性交错。错误消息与旧原型逐字兼容（golden 为基线）。
 //!
 //! 无类型检查器阶段的实现暂态：算术恒发 I64 族——`+` 仅整数（字符串拼接是
 //! `~` → CONCAT，`+` 对 string 无定义）；`EQ/NE` 为单条动态指令。类型检查器
 //! 落地后按静态类型分家。
 
-use xvalue::{write_value, Heap, ObjKind, Value};
+use xvalue::{write_value, Heap, ObjKind, ObjRef, TaskState, Value};
 
 use crate::isa::Opcode;
 use crate::lower::Module;
@@ -64,43 +65,319 @@ impl Frame {
     }
 }
 
-pub fn run(module: &Module, source: &str) -> Result<String, String> {
-    let mut heap = Heap::new();
-    heap.set_gc_stress(std::env::var("XVM_GC_EVERY_ALLOC").is_ok());
-    let gc_stress = std::env::var("XVM_GC_EVERY_ALLOC").is_ok();
-    let mut slots = vec![Value::Void; module.num_slots];
-    // cell 化槽位：加载期建 cell，此后 GETSLOT/SETSLOT 透明穿透。
-    for (idx, marked) in module.cell_slots.iter().enumerate() {
-        if *marked {
-            let o = heap.alloc(ObjKind::Cell(Value::Void));
-            slots[idx] = Value::Obj(o);
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FiberState {
+    Ready,
+    Running,
+    Waiting,
+    Done,
+}
+
+struct Fiber {
+    id: usize,
+    domain: usize,
+    stack: Vec<Value>,
+    frames: Vec<Frame>,
+    state: FiberState,
+    /// panic 展开时的载荷（本域堆的值）。
+    panic_payload: Option<Value>,
+}
+
+impl Fiber {
+    fn new(id: usize, domain: usize, func: u32, regs: usize, env: Vec<Value>) -> Self {
+        Fiber {
+            id,
+            domain,
+            stack: vec![Value::Nil; regs],
+            frames: vec![Frame::new(func, 0, 0, regs, env)],
+            state: FiberState::Ready,
+            panic_payload: None,
         }
     }
-    // 帧窗口的底座：调用约定为「实参占被调帧前导寄存器」。
-    let top_regs = module.funcs[0].regs as usize;
-    let mut stack: Vec<Value> = vec![Value::Nil; top_regs];
-    let mut frames: Vec<Frame> = vec![Frame::new(0, 0, 0, top_regs, Vec::new())];
-    let mut out = String::new();
-    let mut panic_payload: Option<Value> = None;
+}
 
-    // 分配 safepoint：栈、槽表、各帧捕获环境都是精确根集。在分配型指令的
-    // 操作数尚在寄存器（栈槽）时调用——GC 只回收不可达对象，不影响执行。
+/// 任务域：独立堆 + 模块槽位快照 + 该域的全部 fiber。域间无共享内存。
+struct Domain {
+    heap: Heap,
+    slots: Vec<Value>,
+    /// 本域作为 spawn 子任务时：任务对象所在的 (owner 域, 对象)。
+    spawned_as: Option<(usize, ObjRef)>,
+}
+
+impl Domain {
+    fn new(gc_stress: bool, module: &Module) -> Self {
+        let mut heap = Heap::new();
+        heap.set_gc_stress(gc_stress);
+        let mut slots = vec![Value::Void; module.num_slots];
+        // cell 化槽位：加载期建 cell，此后 GETSLOT/SETSLOT 透明穿透。
+        for (idx, marked) in module.cell_slots.iter().enumerate() {
+            if *marked {
+                let o = heap.alloc(ObjKind::Cell(Value::Void));
+                slots[idx] = Value::Obj(o);
+            }
+        }
+        Domain {
+            heap,
+            slots,
+            spawned_as: None,
+        }
+    }
+}
+
+struct Waiting {
+    fiber: usize,
+    task_domain: usize,
+    task: ObjRef,
+    slot: usize,
+}
+
+enum FiberExit {
+    /// 根帧返回（值在本域堆）。
+    Finished(Value),
+    /// AWAIT 挂起：等待的任务（所属域, 对象）与结果落点槽（本 fiber 栈的绝对下标）。
+    Parked { task_domain: usize, task: ObjRef, slot: usize },
+    /// panic 传出到任务边界（payload 在本域堆）。
+    Panicked(Value),
+    /// spawn 请求：调度器建子域/任务对象，并把 spawner 置回队首继续。
+    SpawnRequested { closure: Value, func: u32, env: Vec<Value>, reg: u32 },
+    /// 运行期错误（进程级，确定性终止）。
+    Error(String),
+}
+
+pub fn run(module: &Module, source: &str) -> Result<String, String> {
+    run_value(module, source).map(|(out, _)| out)
+}
+
+/// 同 [`run`]，另返回根 fiber 的最终值（顶层最后一条语句的值；
+/// REPL 值回显用）。`let` 语句的值为 Nil。
+pub fn run_value(module: &Module, source: &str) -> Result<(String, Value), String> {
+    let gc_stress = std::env::var("XVM_GC_EVERY_ALLOC").is_ok();
+    let mut domains: Vec<Domain> = vec![Domain::new(gc_stress, module)];
+    let top_regs = module.funcs[0].regs as usize;
+    let mut fibers: Vec<Fiber> = vec![Fiber::new(0, 0, 0, top_regs, Vec::new())];
+    let mut ready: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    ready.push_back(0);
+    let mut waiting: Vec<Waiting> = Vec::new();
+    let mut out = String::new();
+    let mut root_value: Value = Value::Void;
+
+    // 任务完成交付：结果深拷贝入 owner 堆、置状态、唤醒等待者。
+    fn deliver(
+        domains: &mut Vec<Domain>,
+        fibers: &mut Vec<Fiber>,
+        ready: &mut std::collections::VecDeque<usize>,
+        waiting: &mut Vec<Waiting>,
+        owner: usize,
+        tref: ObjRef,
+        root: Value,
+        failed: bool,
+    ) {
+        let result = domains[owner].heap.copy_value(root);
+        if let Some(ts) = tref.task_state_mut() {
+            ts.done = true;
+            ts.failed = failed;
+            ts.result = result;
+        }
+        let mut i = 0;
+        while i < waiting.len() {
+            if waiting[i].task == tref {
+                let w = waiting.remove(i);
+                let wdomain = fibers[w.fiber].domain;
+                let delivered = domains[wdomain].heap.copy_value(result);
+                let wf = &mut fibers[w.fiber];
+                if failed {
+                    let tf = domains[wdomain].heap.alloc(ObjKind::TaskFailure { payload: delivered });
+                    wf.frames.last_mut().unwrap().err = Value::Obj(tf);
+                } else {
+                    wf.stack[w.slot] = delivered;
+                }
+                wf.state = FiberState::Ready;
+                ready.push_back(w.fiber);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // 调度主循环：FIFO 就绪队列——同域确定性交错、跨域确定性排队。
+    loop {
+        let Some(fid) = ready.pop_front() else {
+            if waiting.is_empty() {
+                return Ok((out, root_value));
+            }
+            return Err("deadlock: all fibers are waiting".to_string());
+        };
+        let d = fibers[fid].domain;
+        fibers[fid].state = FiberState::Running;
+        // 同域兄弟 fiber 作为 GC 根（借用按 split 分离）。
+        let (fiber, siblings) = {
+            let (head, tail) = fibers.split_at_mut(fid);
+            let (f, rest) = tail.split_first_mut().unwrap();
+            let sib: Vec<&mut Fiber> = head
+                .iter_mut()
+                .chain(rest.iter_mut())
+                .filter(|fr| fr.domain == d)
+                .collect();
+            (f, sib)
+        };
+        let domain = &mut domains[d];
+        let sib_refs: Vec<&Fiber> = siblings.iter().map(|f| &**f).collect();
+        let exit = exec_fiber(fiber, domain, &sib_refs, module, source, &mut out);
+
+        match exit {
+            FiberExit::Finished(root) => {
+                fibers[fid].state = FiberState::Done;
+                if fid == 0 && d == 0 {
+                    root_value = root;
+                }
+                if let Some((owner, tref)) = domain.spawned_as {
+                    deliver(
+                        &mut domains, &mut fibers, &mut ready, &mut waiting,
+                        owner, tref, root, false,
+                    );
+                }
+            }
+            FiberExit::Panicked(payload) => {
+                fibers[fid].state = FiberState::Done;
+                if d == 0 {
+                    return Err(panic_message(&Some(payload)));
+                }
+                if let Some((owner, tref)) = domain.spawned_as {
+                    deliver(
+                        &mut domains, &mut fibers, &mut ready, &mut waiting,
+                        owner, tref, payload, true,
+                    );
+                } else {
+                    return Err(panic_message(&Some(payload)));
+                }
+            }
+            FiberExit::Parked { task_domain, task, slot } => {
+                fibers[fid].state = FiberState::Waiting;
+                waiting.push(Waiting {
+                    fiber: fid,
+                    task_domain,
+                    task,
+                    slot,
+                });
+            }
+            FiberExit::SpawnRequested { closure, func, env, reg } => {
+                let parent_d = fibers[fid].domain;
+                let child_d = domains.len();
+                // 任务对象先在父域堆分配（此时 child_d 已知）。
+                let task = domains[parent_d].heap.alloc(ObjKind::Task(TaskState {
+                    domain: child_d,
+                    done: false,
+                    failed: false,
+                    result: Value::Nil,
+                }));
+                // 子域：堆 + 槽位快照 + 闭包体深拷贝（env 的 cell → 子域私有）。
+                let mut child = Domain::new(gc_stress, module);
+                child.spawned_as = Some((parent_d, task));
+                child.slots = domains[parent_d]
+                    .slots
+                    .iter()
+                    .map(|v| child.heap.copy_value(*v))
+                    .collect();
+                let env2: Vec<Value> =
+                    env.iter().map(|v| child.heap.copy_value(*v)).collect();
+                let regs = module.funcs[func as usize].regs as usize;
+                domains.push(child);
+                let child_fid = fibers.len();
+                fibers.push(Fiber::new(child_fid, child_d, func, regs, env2));
+                // spawner 立即继续（队首），子任务排队——确定性 FIFO。
+                let slot = fibers[fid].frames.last().unwrap().base as usize + reg as usize;
+                fibers[fid].stack[slot] = Value::Obj(task);
+                fibers[fid].state = FiberState::Ready;
+                ready.push_front(fid);
+                ready.push_back(child_fid);
+            }
+            FiberExit::Error(msg) => return Err(msg),
+        }
+
+        // 唤醒已完成任务的等待者（交付 = 深拷贝入等待者域 + 置值/置 er）。
+        let mut i = 0;
+        while i < waiting.len() {
+            let w = &waiting[i];
+            let done_failed = w
+                .task
+                .as_task()
+                .map(|ts| (ts.done, ts.failed, ts.result))
+                .filter(|(done, ..)| *done);
+            if let Some((_, failed, result)) = done_failed {
+                let w = waiting.remove(i);
+                let wdomain = fibers[w.fiber].domain;
+                let delivered = domains[wdomain].heap.copy_value(result);
+                let wf = &mut fibers[w.fiber];
+                if failed {
+                    // 失败在边界类型化：TaskFailure（waiter 域）进 er。
+                    let tf = dw_alloc_taskfailure(&mut domains[wdomain].heap, delivered);
+                    wf.frames.last_mut().unwrap().err = Value::Obj(tf);
+                } else {
+                    wf.stack[w.slot] = delivered;
+                }
+                wf.state = FiberState::Ready;
+                ready.push_back(w.fiber);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+fn dw_alloc_taskfailure(heap: &mut Heap, payload: Value) -> ObjRef {
+    heap.alloc(ObjKind::TaskFailure { payload })
+}
+
+// 调度器内取 fiber 所属域（可读性辅助）。
+fn fid_domain(fibers: &[Fiber], fid: usize) -> usize {
+    fibers[fid].domain
+}
+
+/// 执行一个 fiber 直至完成/挂起/panic 出界/出错。
+/// `siblings` = 同域其他 fiber（GC 根，冻结中）。
+fn exec_fiber(
+    fiber: &mut Fiber,
+    domain: &mut Domain,
+    siblings: &[&Fiber],
+    module: &Module,
+    source: &str,
+    out: &mut String,
+) -> FiberExit {
+    let Domain { heap, slots, .. } = domain;
+    let stack = &mut fiber.stack;
+    let frames = &mut fiber.frames;
+    let fiber_panic = &mut fiber.panic_payload;
+
+    // 分配 safepoint：栈、槽表、各帧捕获环境（含同域兄弟 fiber）都是精确根集。
     fn maybe_gc(
         heap: &mut Heap,
         stack: &[Value],
-        slots: &[Value],
         frames: &[Frame],
-        extra: &[Value],
+        panic_payload: Option<Value>,
+        slots: &[Value],
+        siblings: &[&Fiber],
     ) {
         if !heap.should_collect() {
             return;
         }
-        let mut roots: Vec<&[Value]> = vec![stack, slots];
-        for f in frames {
-            roots.push(&f.env);
+        let mut root_vecs: Vec<Vec<Value>> =
+            vec![stack.to_vec(), slots.to_vec()];
+        for fr in frames {
+            root_vecs.push(fr.env.clone());
+            root_vecs.push(vec![fr.err, fr.ret_val]);
         }
-        roots.push(extra);
-        let (freed, kept) = heap.collect(&roots);
+        if let Some(p) = panic_payload {
+            root_vecs.push(vec![p]);
+        }
+        for s in siblings {
+            root_vecs.push(s.stack.clone());
+            for fr in &s.frames {
+                root_vecs.push(fr.env.clone());
+                root_vecs.push(vec![fr.err, fr.ret_val]);
+            }
+        }
+        let slices: Vec<&[Value]> = root_vecs.iter().map(|v| v.as_slice()).collect();
+        let (freed, kept) = heap.collect(&slices);
         if std::env::var("XVM_TRACE_GC").is_ok() {
             eprintln!("gc: freed {freed}, kept {kept}");
         }
@@ -117,7 +394,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
 
         macro_rules! rt {
             ($msg:expr) => {
-                return Err(rt_err(&func.name, source, pos, $msg))
+                return FiberExit::Error(rt_err(&func.name, source, pos, $msg))
             };
         }
 
@@ -196,7 +473,12 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 };
                 stack[dst] = match (l, r) {
                     (Value::Int(a), Value::Int(b)) => {
-                        Value::Int(arith(a, b).map_err(|m| rt_err(&func.name, source, pos, m))?)
+                        Value::Int(
+                            match arith(a, b) {
+                                Ok(v) => v,
+                                Err(m) => rt!(m),
+                            },
+                        )
                     }
                     // `+` 仅整数；字符串拼接是 `~`（CONCAT），`+` 对 string 无定义。
                     _ => rt!("arithmetic operands must be int"),
@@ -217,14 +499,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::Concat => {
-                let gc_extra: Vec<Value> = {
-                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
-                    if let Some(p) = &panic_payload {
-                        v.push(*p);
-                    }
-                    v
-                };
-                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
                 let (dst, l, r) = (
                     base + instr.a() as usize,
                     stack[base + instr.b() as usize],
@@ -282,27 +557,40 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::NewArr => {
-                let gc_extra: Vec<Value> = {
-                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
-                    if let Some(p) = &panic_payload {
-                        v.push(*p);
-                    }
-                    v
-                };
-                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
                 let (dst, base_i, count) = (instr.a() as usize, instr.b() as usize, instr.c() as usize);
                 let elems = stack[base + base_i..base + base_i + count].to_vec();
                 let o = heap.alloc(ObjKind::Arr(elems));
                 stack[base + dst] = Value::Obj(o);
             }
+            Opcode::NewDict => {
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
+                let (dst, base_i, pairs) =
+                    (instr.a() as usize, instr.b() as usize, instr.c() as usize);
+                let mut d: Vec<(Value, Value)> = Vec::with_capacity(pairs);
+                for k in 0..pairs {
+                    let key = stack[base + base_i + k * 2];
+                    let val = stack[base + base_i + k * 2 + 1];
+                    // 字面量重复键后写覆盖（NEWDICT 统一语义；字面量常量键查重
+                    // 是前端职责，随类型检查器批次）。
+                    if let Some(slot) = d.iter_mut().find(|(k2, _)| *k2 == key) {
+                        slot.1 = val;
+                    } else {
+                        d.push((key, val));
+                    }
+                }
+                let o = heap.alloc(ObjKind::Dict(d));
+                stack[base + dst] = Value::Obj(o);
+            }
             Opcode::Len => {
                 let dst = base + instr.a() as usize;
                 match stack[base + instr.b() as usize] {
-                    Value::Obj(o) => match o.as_arr() {
-                        Some(a) => stack[dst] = Value::Int(a.len() as i64),
-                        None => rt!("length of a non-array"),
+                    Value::Obj(o) => match o.kind() {
+                        ObjKind::Arr(a) => stack[dst] = Value::Int(a.len() as i64),
+                        ObjKind::Dict(d) => stack[dst] = Value::Int(d.len() as i64),
+                        _ => rt!("length of a non-container"),
                     },
-                    _ => rt!("length of a non-array"),
+                    _ => rt!("length of a non-container"),
                 }
             }
             Opcode::GetElem => {
@@ -311,13 +599,13 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     stack[base + instr.b() as usize],
                     stack[base + instr.c() as usize],
                 );
-                let i = match idx {
-                    Value::Int(i) => i,
-                    _ => rt!("array index on a non-array"),
-                };
                 match container {
-                    Value::Obj(o) => match o.as_arr() {
-                        Some(a) => {
+                    Value::Obj(o) => match o.kind() {
+                        ObjKind::Arr(a) => {
+                            let i = match idx {
+                                Value::Int(i) => i,
+                                _ => rt!("array index must be int"),
+                            };
                             if i < 0 || i as usize >= a.len() {
                                 rt!(format!(
                                     "array index {i} out of bounds (len {})",
@@ -326,9 +614,22 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                             }
                             stack[dst] = a[i as usize];
                         }
-                        None => rt!("array index on a non-array"),
+                        ObjKind::Dict(d) => {
+                            match d.iter().find(|(k, _)| *k == idx) {
+                                Some((_, v)) => stack[dst] = *v,
+                                None => rt!(format!(
+                                    "missing key: {}",
+                                    {
+                                        let mut s = String::new();
+                                        let _ = write_value(&idx, &mut s);
+                                        s
+                                    }
+                                )),
+                            }
+                        }
+                        _ => rt!("subscript on a non-container"),
                     },
-                    _ => rt!("array index on a non-array"),
+                    _ => rt!("subscript on a non-container"),
                 }
             }
             Opcode::SetElem => {
@@ -337,13 +638,13 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     stack[base + instr.b() as usize],
                     stack[base + instr.c() as usize],
                 );
-                let i = match idx {
-                    Value::Int(i) => i,
-                    _ => rt!("array index on a non-array"),
-                };
                 match container {
-                    Value::Obj(o) => match o.as_arr_mut() {
-                        Some(a) => {
+                    Value::Obj(o) => match o.kind_mut() {
+                        ObjKind::Arr(a) => {
+                            let i = match idx {
+                                Value::Int(i) => i,
+                                _ => rt!("array index must be int"),
+                            };
                             if i < 0 || i as usize >= a.len() {
                                 rt!(format!(
                                     "array index {i} out of bounds (len {})",
@@ -352,9 +653,16 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                             }
                             a[i as usize] = v;
                         }
-                        None => rt!("array index on a non-array"),
+                        ObjKind::Dict(d) => {
+                            if let Some(slot) = d.iter_mut().find(|(k, _)| *k == idx) {
+                                slot.1 = v;
+                            } else {
+                                d.push((idx, v));
+                            }
+                        }
+                        _ => rt!("subscript on a non-container"),
                     },
-                    _ => rt!("array index on a non-array"),
+                    _ => rt!("subscript on a non-container"),
                 }
             }
             Opcode::CallK => {
@@ -378,7 +686,10 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                             if i > 0 {
                                 out.push(' ');
                             }
-                            write_value(v, &mut out).map_err(|_| "print failed".to_string())?;
+                            let ok = write_value(v, out).is_ok();
+                            if !ok {
+                                rt!("print failed");
+                            }
                         }
                         out.push('\n');
                     }
@@ -402,9 +713,9 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     frames.pop();
                     if frames.is_empty() {
                         if f_err != Value::Nil {
-                            return Err(uncaught_message(&f_err));
+                            return FiberExit::Error(uncaught_message(&f_err));
                         }
-                        return Ok(out);
+                        return FiberExit::Finished(ret);
                     }
                     let restore = frames.last().unwrap().restore;
                     if stack.len() > restore {
@@ -425,7 +736,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     let f_err = f.err;
                     frames.pop();
                     if frames.is_empty() {
-                        return Err(uncaught_message(&f_err));
+                        return FiberExit::Error(uncaught_message(&f_err));
                     }
                     let restore = frames.last().unwrap().restore;
                     if stack.len() > restore {
@@ -444,7 +755,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     let f_err = f.err;
                     frames.pop();
                     if frames.is_empty() {
-                        return Err(uncaught_message(&f_err));
+                        return FiberExit::Error(uncaught_message(&f_err));
                     }
                     let restore = frames.last().unwrap().restore;
                     if stack.len() > restore {
@@ -463,17 +774,17 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
             }
             Opcode::Panic => {
                 let payload = stack[base + instr.a() as usize];
-                if panic_payload.is_some() {
-                    return Err("panic during panic".to_string());
+                if fiber_panic.is_some() {
+                    return FiberExit::Error("panic during panic".to_string());
                 }
-                panic_payload = Some(payload);
+                *fiber_panic = Some(payload);
                 let f = frames.last_mut().unwrap();
                 if !f.defers.is_empty() {
                     f.walk = Walk::Panic;
                     f.walk_remaining = f.defers.len();
                     f.ip = *f.defers.last().unwrap();
-                } else if run_continue_panic(&mut frames, &panic_payload, &mut out) {
-                    return Err(panic_message(&panic_payload));
+                } else {
+                    return FiberExit::Panicked((*fiber_panic).unwrap_or(Value::Nil));
                 }
             }
             Opcode::Defer => {
@@ -507,9 +818,9 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                             frames.pop();
                             if frames.is_empty() {
                                 if err != Value::Nil {
-                                    return Err(uncaught_message(&err));
+                                    return FiberExit::Error(uncaught_message(&err));
                                 }
-                                return Ok(out);
+                                return FiberExit::Finished(ret);
                             }
                             let restore = frames.last().unwrap().restore;
                             if stack.len() > restore {
@@ -531,8 +842,8 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                             let f = frames.last_mut().unwrap();
                             let next = *f.defers.last().unwrap();
                             f.ip = next;
-                        } else if run_continue_panic(&mut frames, &panic_payload, &mut out) {
-                            return Err(panic_message(&panic_payload));
+                        } else {
+                            return FiberExit::Panicked((*fiber_panic).unwrap_or(Value::Nil));
                         }
                     }
                     Walk::None => rt!("internal: ENDDEFER outside a defer walk"),
@@ -553,14 +864,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 }
             }
             Opcode::AllocCell => {
-                let gc_extra: Vec<Value> = {
-                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
-                    if let Some(p) = &panic_payload {
-                        v.push(*p);
-                    }
-                    v
-                };
-                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
                 let v = stack[base + instr.b() as usize];
                 let o = heap.alloc(ObjKind::Cell(v));
                 stack[base + instr.a() as usize] = Value::Obj(o);
@@ -591,14 +895,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = stack[base + instr.b() as usize];
             }
             Opcode::RefElem => {
-                let gc_extra: Vec<Value> = {
-                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
-                    if let Some(p) = &panic_payload {
-                        v.push(*p);
-                    }
-                    v
-                };
-                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
                 let (arr, idx) = (
                     stack[base + instr.b() as usize],
                     stack[base + instr.c() as usize],
@@ -640,14 +937,7 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                 stack[base + instr.a() as usize] = Value::Obj(o);
             }
             Opcode::Closure => {
-                let gc_extra: Vec<Value> = {
-                    let mut v: Vec<Value> = frames.iter().flat_map(|f| [f.err, f.ret_val]).collect();
-                    if let Some(p) = &panic_payload {
-                        v.push(*p);
-                    }
-                    v
-                };
-                maybe_gc(&mut heap, &stack, &slots, &frames, &gc_extra);
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
                 // 捕获描述伪指令紧随其后（CapRef/CapUp 序列），一并消费。
                 let frame_env = frames.last().unwrap().env.clone();
                 let mut caps = 0usize;
@@ -744,6 +1034,49 @@ pub fn run(module: &Module, source: &str) -> Result<String, String> {
                     stack.resize(need, Value::Nil);
                 }
                 frames.push(Frame::new(fidx, 0, base_new as u32, need, env));
+            }
+            Opcode::Spawn => {
+                maybe_gc(heap, stack, frames, *fiber_panic, slots, siblings);
+                let closure = stack[base + instr.a() as usize];
+                let func = match &closure {
+                    Value::Obj(o) => match o.kind() {
+                        ObjKind::Closure { func, .. } => *func,
+                        _ => rt!("spawn of a non-closure value"),
+                    },
+                    _ => rt!("spawn of a non-closure value"),
+                };
+                let env = match &closure {
+                    Value::Obj(o) => match o.kind() {
+                        ObjKind::Closure { env, .. } => env.to_vec(),
+                        _ => unreachable!(),
+                    },
+                    _ => unreachable!(),
+                };
+                return FiberExit::SpawnRequested { closure, func, env, reg: instr.a() };
+            }
+            Opcode::Await => {
+                let v = stack[base + instr.a() as usize];
+                let (tdomain, tref, done, failed, result) = match v {
+                    Value::Obj(o) => match o.kind() {
+                        ObjKind::Task(ts) => (ts.domain, o, ts.done, ts.failed, ts.result),
+                        _ => rt!("await on a non-task value"),
+                    },
+                    _ => rt!("await on a non-task value"),
+                };
+                if done {
+                    // Task 对象在 spawner 域 = 本域：结果直取。失败经边界类型化
+                    // 的 TaskFailure 进 er（后续 RET 传播 / try-catch 捕获）。
+                    stack[base + instr.a() as usize] = result;
+                    if failed {
+                        frames.last_mut().unwrap().err = result;
+                    }
+                } else {
+                    return FiberExit::Parked {
+                        task_domain: tdomain,
+                        task: tref,
+                        slot: base + instr.a() as usize,
+                    };
+                }
             }
         }
     }

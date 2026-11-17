@@ -70,6 +70,9 @@ pub enum Opcode {
     EndDefer = 50,
     Mark = 51,
     EndScope = 52,
+    Spawn = 53,
+    Await = 54,
+    NewDict = 55,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +285,15 @@ impl Instr {
         if v == Opcode::EndScope as u8 {
             return Opcode::EndScope;
         }
+        if v == Opcode::Spawn as u8 {
+            return Opcode::Spawn;
+        }
+        if v == Opcode::Await as u8 {
+            return Opcode::Await;
+        }
+        if v == Opcode::NewDict as u8 {
+            return Opcode::NewDict;
+        }
         unreachable!("invalid opcode byte {v} in {:#010x}", self.0)
     }
 
@@ -439,6 +451,11 @@ fn dump_instr(instr: Instr, ip: usize, m: &Module, w: &mut impl fmt::Write) {
         Opcode::EndDefer => write!(w, "ENDDEFER"),
         Opcode::Mark => write!(w, "MARK"),
         Opcode::EndScope => write!(w, "ENDSCOPE"),
+        Opcode::Spawn => write!(w, "SPAWN {}", r(instr.a())),
+        Opcode::Await => write!(w, "AWAIT {}", r(instr.a())),
+        Opcode::NewDict => {
+            write!(w, "NEWDICT {}, {}, pairs={}", r(instr.a()), r(instr.b()), instr.c())
+        }
         Opcode::GetSlotCell => write!(w, "GETSLOTCELL {}, s{}", r(instr.a()), instr.bx()),
     }
     .unwrap();

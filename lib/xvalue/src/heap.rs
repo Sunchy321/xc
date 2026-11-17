@@ -29,11 +29,35 @@ pub enum ObjKind {
     ElemRef { arr: ObjRef, idx: i64 },
     /// 闭包：函数表索引 + 捕获环境（M1：env 槽恒为 cell 对象）。
     Closure { func: u32, env: Box<[Value]> },
+    /// 字典：插入序键值对（v1 线性扫描；hash 分派随类型表批次）。
+    Dict(Vec<(Value, Value)>),
+    /// 任务句柄：子任务域的状态（result 在完成时深拷贝入本堆）。
+    Task(TaskState),
+    /// 任务失败报告：panic 载荷经边界类型化（用户不可构造）。
+    TaskFailure { payload: Value },
+}
+
+/// 任务状态（Task 对象的载荷）。
+#[derive(Clone, Debug)]
+pub struct TaskState {
+    /// 子任务域索引（调度器层）。
+    pub domain: usize,
+    pub done: bool,
+    pub failed: bool,
+    pub result: Value,
 }
 
 /// 堆对象句柄：非移动堆上的稳定地址，place 引用（cell/投影）恒等性的载体。
 #[derive(Clone, Copy)]
 pub struct ObjRef(NonNull<Obj>);
+
+impl Eq for ObjRef {}
+
+impl std::hash::Hash for ObjRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
 
 impl PartialEq for ObjRef {
     /// 引用恒等：按 place 地址比较（忽略读写权限——权限在类型层）。
@@ -76,6 +100,20 @@ impl ObjRef {
         }
     }
 
+    pub fn as_task(self) -> Option<&'static TaskState> {
+        match self.kind() {
+            ObjKind::Task(ts) => Some(ts),
+            _ => None,
+        }
+    }
+
+    pub fn task_state_mut(self) -> Option<&'static mut TaskState> {
+        match self.kind_mut() {
+            ObjKind::Task(ts) => Some(ts),
+            _ => None,
+        }
+    }
+
     pub fn is_marked(self) -> bool {
         // SAFETY: Heap 存活期间对象地址恒定；Cell 提供内部可变性。
         unsafe { self.0.as_ref() }.mark.get()
@@ -96,6 +134,20 @@ impl ObjRef {
     pub fn as_arr_mut(self) -> Option<&'static mut Vec<Value>> {
         match self.kind_mut() {
             ObjKind::Arr(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn as_dict(self) -> Option<&'static Vec<(Value, Value)>> {
+        match self.kind() {
+            ObjKind::Dict(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn as_dict_mut(self) -> Option<&'static mut Vec<(Value, Value)>> {
+        match self.kind_mut() {
+            ObjKind::Dict(d) => Some(d),
             _ => None,
         }
     }
@@ -147,6 +199,69 @@ impl Heap {
         self.gc_stress = on;
     }
 
+    /// 跨堆深拷贝：把值（属于另一个堆）复制进本堆。环安全（seen 占位 +
+    /// 事后安装）；Task 快照复制其当时状态。隔离模型的转移原语。
+    pub fn copy_value(&mut self, v: Value) -> Value {
+        let mut seen: std::collections::HashMap<ObjRef, ObjRef> = std::collections::HashMap::new();
+        self.copy_inner(v, &mut seen)
+    }
+
+    fn copy_inner(&mut self, v: Value, seen: &mut std::collections::HashMap<ObjRef, ObjRef>) -> Value {
+        match v {
+            Value::Obj(o) => {
+                if let Some(dst) = seen.get(&o) {
+                    return Value::Obj(*dst);
+                }
+                // 占位防环：先分配，递归完成后经 kind_mut 安装真实内容。
+                let placeholder = self.alloc(ObjKind::Cell(Value::Nil));
+                seen.insert(o, placeholder);
+                let kind = match o.kind() {
+                    ObjKind::Str(s) => ObjKind::Str(s.clone()),
+                    ObjKind::Arr(items) => ObjKind::Arr(
+                        items.iter().map(|x| self.copy_inner(*x, seen)).collect(),
+                    ),
+                    ObjKind::Cell(inner) => ObjKind::Cell(self.copy_inner(*inner, seen)),
+                    ObjKind::ElemRef { arr, idx } => {
+                        let arr2 = match self.copy_inner(Value::Obj(*arr), seen) {
+                            Value::Obj(a) => a,
+                            _ => unreachable!("copied elemref base is an array"),
+                        };
+                        ObjKind::ElemRef { arr: arr2, idx: *idx }
+                    }
+                    ObjKind::Dict(pairs) => ObjKind::Dict(
+                        pairs
+                            .iter()
+                            .map(|(k, v)| {
+                                (self.copy_inner(*k, seen), self.copy_inner(*v, seen))
+                            })
+                            .collect(),
+                    ),
+                    ObjKind::Closure { func, env } => ObjKind::Closure {
+                        func: *func,
+                        env: env
+                            .iter()
+                            .map(|x| self.copy_inner(*x, seen))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    },
+                    ObjKind::Task(ts) => ObjKind::Task(TaskState {
+                        domain: ts.domain,
+                        done: ts.done,
+                        failed: ts.failed,
+                        result: self.copy_inner(ts.result, seen),
+                    }),
+                    ObjKind::TaskFailure { payload } => {
+                        ObjKind::TaskFailure { payload: self.copy_inner(*payload, seen) }
+                    }
+                };
+                let dst = seen[&o];
+                *dst.kind_mut() = kind;
+                Value::Obj(dst)
+            }
+            other => other,
+        }
+    }
+
     /// 当前是否处于分配 safepoint 且需要回收。
     pub fn should_collect(&self) -> bool {
         self.gc_stress || self.objs.len() >= self.next_gc
@@ -184,12 +299,32 @@ impl Heap {
                         work.push(*child);
                     }
                 }
+                ObjKind::Dict(pairs) => {
+                    for (k, v) in pairs.iter() {
+                        if let Value::Obj(child) = k {
+                            work.push(*child);
+                        }
+                        if let Value::Obj(child) = v {
+                            work.push(*child);
+                        }
+                    }
+                }
                 ObjKind::ElemRef { arr, .. } => work.push(*arr),
                 ObjKind::Closure { env, .. } => {
                     for v in env.iter() {
                         if let Value::Obj(child) = v {
                             work.push(*child);
                         }
+                    }
+                }
+                ObjKind::Task(ts) => {
+                    if let Value::Obj(child) = &ts.result {
+                        work.push(*child);
+                    }
+                }
+                ObjKind::TaskFailure { payload } => {
+                    if let Value::Obj(child) = payload {
+                        work.push(*child);
                     }
                 }
             }
