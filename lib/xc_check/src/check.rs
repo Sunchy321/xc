@@ -51,6 +51,7 @@ pub fn check(parsed: Parsed) -> Result<Program, String> {
     for stmt in &program.top {
         check_stmt(stmt, &program)?;
     }
+    crate::infer::infer_program(&program)?;
     Ok(program)
 }
 
@@ -404,5 +405,16 @@ mod tests {
     fn recursion_is_allowed() {
         let p = run_check("func f(n: int) { return f(n - 1); } print(f(1));").unwrap();
         assert_eq!(p.funcs.len(), 1);
+    }
+
+    #[test]
+    fn static_type_mismatch_is_reported_by_check() {
+        let error = match run_check("1 + \"bad\";") {
+            Ok(_) => panic!("check accepted operands with incompatible types"),
+            Err(error) => error,
+        };
+        assert!(error.contains("arithmetic operands must be int"), "{error}");
+        assert!(error.contains("expected int"), "{error}");
+        assert!(error.contains("got string"), "{error}");
     }
 }
