@@ -12,14 +12,17 @@ use xc_span::{Span, Symbol};
 
 use crate::{
     check::Program,
+    diagnostic::{CheckDiagnostic, DiagnosticCode},
+    type_info::{TypeInfo, TypedExpression},
     types::{Ty, common_type, from_ast, is_subtype},
 };
+
+type InferResult<T> = Result<T, CheckDiagnostic>;
 
 #[derive(Clone)]
 struct FunctionSig {
     params: Vec<Ty>,
     ret: Ty,
-    decl_offset: u32,
 }
 
 #[derive(Clone)]
@@ -64,18 +67,22 @@ struct Checker<'a> {
     type_constraints: Vec<TypeConstraint>,
     array_constraints: Vec<ArrayConstraint>,
     empty_dictionaries: Vec<(Ty, Span)>,
-    return_declarations: HashMap<u32, (Symbol, u32)>,
+    return_declarations: HashMap<u32, (Symbol, Span)>,
+    expression_types: Vec<(Span, Ty)>,
     loop_results: Vec<Vec<Ty>>,
     current_return: Option<Ty>,
 }
 
-pub(crate) fn infer_program(program: &Program) -> Result<(), String> {
+pub(crate) fn infer_program(program: &Program) -> (InferResult<()>, TypeInfo) {
     let mut checker = Checker::new(program);
-    checker.collect_signatures()?;
-    checker.collect_globals()?;
-    checker.check_top_level()?;
-    checker.check_functions()?;
-    checker.solve_returns()
+    let result = checker
+        .collect_signatures()
+        .and_then(|()| checker.collect_globals())
+        .and_then(|()| checker.check_top_level())
+        .and_then(|()| checker.check_functions())
+        .and_then(|()| checker.solve_returns());
+    let type_info = checker.type_info();
+    (result, type_info)
 }
 
 impl<'a> Checker<'a> {
@@ -93,6 +100,7 @@ impl<'a> Checker<'a> {
             return_declarations: HashMap::new(),
             loop_results: Vec::new(),
             current_return: None,
+            expression_types: Vec::new(),
         }
     }
 
@@ -102,7 +110,7 @@ impl<'a> Checker<'a> {
         id
     }
 
-    fn collect_signatures(&mut self) -> Result<(), String> {
+    fn collect_signatures(&mut self) -> InferResult<()> {
         for function in &self.program.funcs {
             let params = function
                 .sig
@@ -114,24 +122,17 @@ impl<'a> Checker<'a> {
                 FuncReturn::Inferred => Ty::Var(self.new_var()),
                 FuncReturn::Type(ty) => from_ast(ty),
             };
-            let decl_offset = function.ident.span.lo.0;
             if let Ty::Var(id) = &ret {
                 self.return_declarations
-                    .insert(*id, (function.ident.name, decl_offset));
+                    .insert(*id, (function.ident.name, function.ident.span));
             }
-            self.signatures.insert(
-                function.ident.name,
-                FunctionSig {
-                    params,
-                    ret,
-                    decl_offset,
-                },
-            );
+            self.signatures
+                .insert(function.ident.name, FunctionSig { params, ret });
         }
         Ok(())
     }
 
-    fn collect_globals(&mut self) -> Result<(), String> {
+    fn collect_globals(&mut self) -> InferResult<()> {
         for statement in &self.program.top {
             if let StmtKind::Let(pattern, _) = &statement.kind {
                 if let PatternKind::Bind(ident, _) = &pattern.kind {
@@ -143,14 +144,14 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check_top_level(&mut self) -> Result<(), String> {
+    fn check_top_level(&mut self) -> InferResult<()> {
         for statement in &self.program.top {
             self.infer_stmt(statement)?;
         }
         Ok(())
     }
 
-    fn check_functions(&mut self) -> Result<(), String> {
+    fn check_functions(&mut self) -> InferResult<()> {
         for function in &self.program.funcs {
             let signature = self.signatures[&function.ident.name].clone();
             self.push_scope();
@@ -166,9 +167,10 @@ impl<'a> Checker<'a> {
                 FuncBody::Block(block) => self.infer_block(block, body_expected)?,
                 FuncBody::Arrow(expression) => self.infer_expr(expression, body_expected)?,
                 FuncBody::Semicolon => {
-                    return Err(format!(
-                        "function without body: {}",
-                        function.ident.as_str()
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Unsupported,
+                        function.ident.span,
+                        format!("function without body: {}", function.ident.as_str()),
                     ));
                 }
             };
@@ -189,7 +191,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn solve_returns(&mut self) -> Result<(), String> {
+    fn solve_returns(&mut self) -> InferResult<()> {
         loop {
             let before = self.solutions.clone();
             for (id, values) in self.returns.clone() {
@@ -225,16 +227,17 @@ impl<'a> Checker<'a> {
         for (dictionary, span) in self.empty_dictionaries.clone() {
             let dictionary = self.resolve(dictionary);
             if first_var(&dictionary).is_some() || contains_unknown(&dictionary) {
-                return Err(format!(
-                    "cannot infer empty dictionary type at byte {}",
-                    span.lo.0
+                return Err(CheckDiagnostic::new(
+                    DiagnosticCode::Type,
+                    span,
+                    "cannot infer empty dictionary type",
                 ));
             }
         }
         Ok(())
     }
 
-    fn solve_type_constraints(&mut self, final_pass: bool) -> Result<(), String> {
+    fn solve_type_constraints(&mut self, final_pass: bool) -> InferResult<()> {
         for constraint in self.type_constraints.clone() {
             let actual = self.resolve(constraint.actual);
             let expected = self.resolve(constraint.expected);
@@ -254,16 +257,17 @@ impl<'a> Checker<'a> {
                 continue;
             }
             if final_pass && !is_subtype(&actual, &expected) {
-                return Err(format!(
-                    "{}: expected {expected}, got {actual} at byte {}",
-                    constraint.context, constraint.span.lo.0
+                return Err(CheckDiagnostic::new(
+                    DiagnosticCode::Type,
+                    constraint.span,
+                    format!("{}: expected {expected}, got {actual}", constraint.context),
                 ));
             }
         }
         Ok(())
     }
 
-    fn solve_array_constraints(&mut self, final_pass: bool) -> Result<(), String> {
+    fn solve_array_constraints(&mut self, final_pass: bool) -> InferResult<()> {
         for constraint in self.array_constraints.clone() {
             let array = self.resolve(constraint.array);
             let element = constraint.element.clone();
@@ -309,9 +313,13 @@ impl<'a> Checker<'a> {
                         };
                         (element, index_types)
                     } else if final_pass {
-                        return Err(format!(
-                            "{}: expected array or dictionary, got {actual} at byte {}",
-                            constraint.context, constraint.span.lo.0
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Type,
+                            constraint.span,
+                            format!(
+                                "{}: expected array or dictionary, got {actual}",
+                                constraint.context
+                            ),
                         ));
                     } else {
                         (None, Vec::new())
@@ -322,9 +330,13 @@ impl<'a> Checker<'a> {
                 Ty::Var(_) => (None, Vec::new()),
                 other => {
                     if final_pass {
-                        return Err(format!(
-                            "{}: expected array or dictionary, got {other} at byte {}",
-                            constraint.context, constraint.span.lo.0
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Type,
+                            constraint.span,
+                            format!(
+                                "{}: expected array or dictionary, got {other}",
+                                constraint.context
+                            ),
                         ));
                     }
                     (None, Vec::new())
@@ -351,12 +363,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn merge_inferred_type(
-        &mut self,
-        variable: Ty,
-        candidate: Ty,
-        span: Span,
-    ) -> Result<(), String> {
+    fn merge_inferred_type(&mut self, variable: Ty, candidate: Ty, span: Span) -> InferResult<()> {
         let Ty::Var(id) = variable else {
             return self.unify(variable, candidate, span);
         };
@@ -371,16 +378,17 @@ impl<'a> Checker<'a> {
             common_type(previous, candidate)
         };
         if contains_var(&merged, id) {
-            return Err(format!(
-                "cannot infer recursive array element type at byte {}",
-                span.lo.0
+            return Err(CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                span,
+                "cannot infer recursive array element type",
             ));
         }
         self.solutions.insert(id, merged);
         Ok(())
     }
 
-    fn unify(&mut self, left: Ty, right: Ty, span: Span) -> Result<(), String> {
+    fn unify(&mut self, left: Ty, right: Ty, span: Span) -> InferResult<()> {
         let left = self.resolve(left);
         let right = self.resolve(right);
         if left == right {
@@ -394,9 +402,10 @@ impl<'a> Checker<'a> {
             (Ty::Unknown, _) | (_, Ty::Unknown) => Ok(()),
             (Ty::Var(id), ty) | (ty, Ty::Var(id)) => {
                 if contains_var(&ty, id) {
-                    return Err(format!(
-                        "cannot infer recursive array element type at byte {}",
-                        span.lo.0
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Type,
+                        span,
+                        "cannot infer recursive array element type",
                     ));
                 }
                 self.solutions.insert(id, ty);
@@ -442,14 +451,15 @@ impl<'a> Checker<'a> {
                 }
                 self.unify(*left_ret, *right_ret, span)
             }
-            (left, right) => Err(format!(
-                "array element type mismatch: expected {left}, got {right} at byte {}",
-                span.lo.0
+            (left, right) => Err(CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                span,
+                format!("array element type mismatch: expected {left}, got {right}"),
             )),
         }
     }
 
-    fn set_return_solution(&mut self, id: u32, candidate: Ty) -> Result<(), String> {
+    fn set_return_solution(&mut self, id: u32, candidate: Ty) -> InferResult<()> {
         let candidate = self.resolve(candidate);
         let merged = match self.solutions.get(&id).cloned() {
             Some(previous) => common_type(self.resolve(previous), candidate),
@@ -465,7 +475,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn reject_unresolved_returns(&self) -> Result<(), String> {
+    fn reject_unresolved_returns(&self) -> InferResult<()> {
         for id in self.return_declarations.keys().copied() {
             let resolved = self.resolve(Ty::Var(id));
             if first_var(&resolved).is_some() {
@@ -475,23 +485,22 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn cannot_infer_return(&self, id: u32) -> String {
+    fn cannot_infer_return(&self, id: u32) -> CheckDiagnostic {
         match self.return_declarations.get(&id) {
-            Some((name, recorded_offset)) => {
-                let offset = self
-                    .signatures
-                    .get(name)
-                    .map_or(*recorded_offset, |signature| signature.decl_offset);
-                format!(
-                    "cannot infer function return type {} at byte {offset}",
-                    name.as_str()
-                )
-            }
-            None => format!("cannot infer function return type ?{id}"),
+            Some((name, span)) => CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                *span,
+                format!("cannot infer function return type {}", name.as_str()),
+            ),
+            None => CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                Span::DUMMY,
+                format!("cannot infer function return type ?{id}"),
+            ),
         }
     }
 
-    fn infer_stmt(&mut self, statement: &Stmt) -> Result<Ty, String> {
+    fn infer_stmt(&mut self, statement: &Stmt) -> InferResult<Ty> {
         match &statement.kind {
             StmtKind::Expr(expression) => self.infer_expr(expression, None),
             StmtKind::ExprSemi(expression) => {
@@ -523,7 +532,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_block(&mut self, block: &Block, expected: Option<&Ty>) -> Result<Ty, String> {
+    fn infer_block(&mut self, block: &Block, expected: Option<&Ty>) -> InferResult<Ty> {
         self.push_scope();
         let mut result = Ty::Void;
         let mut terminated = false;
@@ -554,15 +563,17 @@ impl<'a> Checker<'a> {
         Ok(result)
     }
 
-    fn infer_expr(&mut self, expression: &Expr, expected: Option<&Ty>) -> Result<Ty, String> {
+    fn infer_expr(&mut self, expression: &Expr, expected: Option<&Ty>) -> InferResult<Ty> {
         let inferred = self.infer_expr_inner(expression, expected)?;
+        self.expression_types
+            .push((expression.span, inferred.clone()));
         if let Some(expected) = expected {
             self.require_type(inferred.clone(), expected, expression.span, "type mismatch")?;
         }
         Ok(inferred)
     }
 
-    fn infer_expr_inner(&mut self, expression: &Expr, expected: Option<&Ty>) -> Result<Ty, String> {
+    fn infer_expr_inner(&mut self, expression: &Expr, expected: Option<&Ty>) -> InferResult<Ty> {
         match &expression.kind {
             ExprKind::Literal(literal) => Ok(match literal.kind {
                 LiteralKind::Integer => Ty::Int,
@@ -615,7 +626,7 @@ impl<'a> Checker<'a> {
                 )
                 .map(|(ty, _)| ty),
             ExprKind::FuncCall(callee, arguments, _) => {
-                self.infer_call(callee, arguments.0.as_slice())
+                self.infer_call(callee, arguments.0.as_slice(), expression.span)
             }
             ExprKind::Prefix(operator, operand) => {
                 let ty = self.infer_expr(operand, None)?;
@@ -680,10 +691,18 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_call(&mut self, callee: &Expr, arguments: &[Argument]) -> Result<Ty, String> {
+    fn infer_call(
+        &mut self,
+        callee: &Expr,
+        arguments: &[Argument],
+        call_span: Span,
+    ) -> InferResult<Ty> {
         if let ExprKind::Path(path) = &callee.kind {
             if path.segments.len() == 1 {
                 let name = path.segments[0].ident.name;
+                if matches!(name.as_str(), "print" | "panic" | "spawn") {
+                    self.expression_types.push((callee.span, Ty::Unknown));
+                }
                 match name.as_str() {
                     "print" => {
                         for argument in arguments {
@@ -695,9 +714,10 @@ impl<'a> Checker<'a> {
                     }
                     "panic" => {
                         if arguments.len() != 1 {
-                            return Err(format!(
-                                "panic expects 1 argument, got {}",
-                                arguments.len()
+                            return Err(CheckDiagnostic::new(
+                                DiagnosticCode::Type,
+                                call_span,
+                                format!("panic expects 1 argument, got {}", arguments.len()),
                             ));
                         }
                         match arguments.first() {
@@ -727,12 +747,23 @@ impl<'a> Checker<'a> {
                 if self.lookup(name).is_none()
                     && let Some(signature) = self.signatures.get(&name).cloned()
                 {
+                    self.expression_types.push((
+                        callee.span,
+                        Ty::Function {
+                            params: signature.params.clone(),
+                            ret: Box::new(signature.ret.clone()),
+                        },
+                    ));
                     if arguments.len() != signature.params.len() {
-                        return Err(format!(
-                            "function {} expects {} arguments, got {}",
-                            name.as_str(),
-                            signature.params.len(),
-                            arguments.len()
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Type,
+                            call_span,
+                            format!(
+                                "function {} expects {} arguments, got {}",
+                                name.as_str(),
+                                signature.params.len(),
+                                arguments.len()
+                            ),
                         ));
                     }
                     for (argument, expected) in arguments.iter().zip(&signature.params) {
@@ -758,7 +789,7 @@ impl<'a> Checker<'a> {
         items: &[ExprItem],
         expected: Option<&Ty>,
         span: Span,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         let expected_element = match expected {
             Some(Ty::Array(element)) => Some(element.as_ref()),
             _ => None,
@@ -803,16 +834,18 @@ impl<'a> Checker<'a> {
                     element
                 }
                 _ => {
-                    return Err(format!(
-                        "cannot infer empty array element type at byte {}",
-                        span.lo.0
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Type,
+                        span,
+                        "cannot infer empty array element type",
                     ));
                 }
             },
             None => {
-                return Err(format!(
-                    "cannot infer empty array element type at byte {}",
-                    span.lo.0
+                return Err(CheckDiagnostic::new(
+                    DiagnosticCode::Type,
+                    span,
+                    "cannot infer empty array element type",
                 ));
             }
         };
@@ -828,7 +861,7 @@ impl<'a> Checker<'a> {
         items: &[DictItem],
         expected: Option<&Ty>,
         span: Span,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         let expected = expected.map(|ty| self.resolve(ty.clone()));
         let expected_dictionary = expected.as_ref().and_then(|ty| match ty {
             Ty::Dictionary { key, value } => Some((key.as_ref().clone(), value.as_ref().clone())),
@@ -908,7 +941,7 @@ impl<'a> Checker<'a> {
         operator: Symbol,
         operands: &[P<Expr>],
         span: Span,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         use xc_span::symbol::op;
         match operator {
             op::Plus | op::Minus | op::Multiply | op::Divide | op::Modulo => {
@@ -963,7 +996,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_assignment(&mut self, operands: &[P<Expr>], span: Span) -> Result<Ty, String> {
+    fn infer_assignment(&mut self, operands: &[P<Expr>], span: Span) -> InferResult<Ty> {
         if operands.len() != 2 {
             for operand in operands {
                 self.infer_expr(operand, None)?;
@@ -1013,11 +1046,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn infer_comparison(
-        &mut self,
-        operators: &[Symbol],
-        operands: &[P<Expr>],
-    ) -> Result<Ty, String> {
+    fn infer_comparison(&mut self, operators: &[Symbol], operands: &[P<Expr>]) -> InferResult<Ty> {
         use xc_span::symbol::op;
         let types = operands
             .iter()
@@ -1051,7 +1080,7 @@ impl<'a> Checker<'a> {
         arguments: &[Argument],
         span: Span,
         access: ArrayAccess,
-    ) -> Result<(Ty, IndexedContainer), String> {
+    ) -> InferResult<(Ty, IndexedContainer)> {
         let inferred_base = self.infer_expr(base, None)?;
         let base_ty = self.resolve(inferred_base);
         if matches!(base_ty, Ty::Unknown) {
@@ -1120,9 +1149,10 @@ impl<'a> Checker<'a> {
                 Ok((element, IndexedContainer::Deferred))
             }
             Ty::Never => Ok((Ty::Never, IndexedContainer::Deferred)),
-            other => Err(format!(
-                "array subscript: expected array, got {other} at byte {}",
-                span.lo.0
+            other => Err(CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                span,
+                format!("array subscript: expected array, got {other}"),
             )),
         }
     }
@@ -1133,7 +1163,7 @@ impl<'a> Checker<'a> {
         then: &Expr,
         else_: Option<&Expr>,
         expected: Option<&Ty>,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         let condition_ty = self.infer_expr(condition, None)?;
         self.require_type(
             condition_ty,
@@ -1159,7 +1189,7 @@ impl<'a> Checker<'a> {
         else_: Option<&Block>,
         kind: ForLoopKind,
         label: Option<Symbol>,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         if kind == ForLoopKind::ForAwait || label.is_some() {
             self.infer_expr(iter, None)?;
             return Ok(Ty::Unknown);
@@ -1182,9 +1212,10 @@ impl<'a> Checker<'a> {
                 element
             }
             other => {
-                return Err(format!(
-                    "array iteration: expected array, got {other} at byte {}",
-                    iter.span.lo.0
+                return Err(CheckDiagnostic::new(
+                    DiagnosticCode::Type,
+                    iter.span,
+                    format!("array iteration: expected array, got {other}"),
                 ));
             }
         };
@@ -1224,7 +1255,7 @@ impl<'a> Checker<'a> {
         body: &Expr,
         else_: Option<&Expr>,
         _label: Option<Symbol>,
-    ) -> Result<Ty, String> {
+    ) -> InferResult<Ty> {
         let condition_ty = self.infer_expr(condition, None)?;
         self.require_type(
             condition_ty,
@@ -1254,7 +1285,7 @@ impl<'a> Checker<'a> {
         expected: &Ty,
         span: Span,
         context: &'static str,
-    ) -> Result<(), String> {
+    ) -> InferResult<()> {
         let actual = self.resolve(actual);
         let expected = self.resolve(expected.clone());
         if contains_unknown(&actual) || contains_unknown(&expected) {
@@ -1272,15 +1303,36 @@ impl<'a> Checker<'a> {
         if is_subtype(&actual, &expected) {
             Ok(())
         } else {
-            Err(format!(
-                "{context}: expected {expected}, got {actual} at byte {}",
-                span.lo.0
+            Err(CheckDiagnostic::new(
+                DiagnosticCode::Type,
+                span,
+                format!("{context}: expected {expected}, got {actual}"),
             ))
         }
     }
 
     fn resolve(&self, ty: Ty) -> Ty {
         self.resolve_with_seen(ty, &mut HashSet::new())
+    }
+
+    fn type_info(&self) -> TypeInfo {
+        let mut unavailable_expressions = Vec::new();
+        let expressions = self
+            .expression_types
+            .iter()
+            .filter_map(|(span, ty)| {
+                let resolved = self.resolve(ty.clone());
+                if first_var(&resolved).is_some() || contains_unknown(&resolved) {
+                    unavailable_expressions.push(*span);
+                    return None;
+                }
+                Some(TypedExpression {
+                    span: *span,
+                    type_name: resolved.to_string(),
+                })
+            })
+            .collect();
+        TypeInfo::new(expressions, unavailable_expressions)
     }
 
     fn resolve_with_seen(&self, ty: Ty, seen: &mut HashSet<u32>) -> Ty {

@@ -7,9 +7,11 @@ use xc_error::diag::Diagnostic;
 use xc_error::msg::DiagnosticMessage;
 use xc_parse::parser_from_source_str;
 use xc_parse::session::ParseSession;
+use xc_span::Span;
 use xc_span::source_map::Filename;
 use xc_span::symbol::kw;
-use xc_span::Span;
+
+use crate::diagnostic::{CheckDiagnostic, DiagnosticCode};
 
 #[derive(Debug)]
 pub struct Parsed {
@@ -18,6 +20,13 @@ pub struct Parsed {
 }
 
 pub fn parse_program(name: Filename, source: &str) -> Result<Parsed, String> {
+    parse_program_with_diagnostics(name, source).map_err(|diagnostic| diagnostic.to_string())
+}
+
+pub fn parse_program_with_diagnostics(
+    name: Filename,
+    source: &str,
+) -> Result<Parsed, CheckDiagnostic> {
     let session = ParseSession::new();
     let mut parser = parser_from_source_str(&session, name, source.to_string());
 
@@ -29,17 +38,27 @@ pub fn parse_program(name: Filename, source: &str) -> Result<Parsed, String> {
             break;
         }
         if parser.check_keyword(kw::Func) {
-            let decl = parser.parse_decl().map_err(format_diag)?;
+            let decl = parser.parse_decl().map_err(parse_diagnostic)?;
             match decl {
                 Some(decl) => match decl.kind {
                     DeclKind::Func(f) => funcs.push(f),
-                    _ => return Err("unsupported top-level declaration".to_string()),
+                    _ => {
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Unsupported,
+                            decl.span,
+                            "unsupported top-level declaration",
+                        ));
+                    }
                 },
                 None => {
-                    return Err("internal: parse_decl returned None after func keyword".to_string())
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Internal,
+                        parser.token.span,
+                        "internal: parse_decl returned None after func keyword",
+                    ));
                 }
             }
-        } else if let Some(stmt) = parser.parse_full_stmt().map_err(format_diag)? {
+        } else if let Some(stmt) = parser.parse_full_stmt().map_err(parse_diagnostic)? {
             top.push(stmt);
         } else {
             break;
@@ -49,13 +68,19 @@ pub fn parse_program(name: Filename, source: &str) -> Result<Parsed, String> {
     Ok(Parsed { funcs, top })
 }
 
-fn format_diag(d: Diagnostic<'_>) -> String {
-    d.messages
+fn parse_diagnostic(d: Diagnostic<'_>) -> CheckDiagnostic {
+    let message = d
+        .messages
         .first()
         .map(|m| match m {
             DiagnosticMessage::String(s) => s.to_string(),
         })
-        .unwrap_or_else(|| "parse error".to_string())
+        .unwrap_or_else(|| "parse error".to_string());
+    CheckDiagnostic::new(
+        DiagnosticCode::Syntax,
+        d.span.get_primary().unwrap_or(Span::DUMMY),
+        message,
+    )
 }
 
 /// Parse a whole file as a sequence of declarations.
@@ -118,4 +143,3 @@ fn line_col(source: &str, span: Span) -> String {
 
     format!("{line}:{col}")
 }
-

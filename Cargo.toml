@@ -11,6 +11,7 @@ members = [
     "lib/xvalue",
     "lib/xc_check",
     "lib/xvm",
+    "lib/x_language_server",
 ]
 resolver = "3"
 

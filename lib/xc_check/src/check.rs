@@ -6,7 +6,9 @@ use xc_ast::ptr::P;
 use xc_ast::stmt::{Block, Stmt, StmtKind};
 use xc_span::Symbol;
 
+use crate::diagnostic::{CheckDiagnostic, DiagnosticCode};
 use crate::parse::Parsed;
+use crate::type_info::TypeInfo;
 
 #[derive(Debug)]
 pub struct Program {
@@ -18,12 +20,24 @@ pub struct Program {
     pub var_names: HashSet<Symbol>,
 }
 
-pub fn check(parsed: Parsed) -> Result<Program, String> {
+pub struct CheckAnalysis {
+    pub result: Result<Program, CheckDiagnostic>,
+    pub type_info: TypeInfo,
+}
+
+pub fn analyze(parsed: Parsed) -> CheckAnalysis {
     let mut func_indices = HashMap::new();
     for (i, f) in parsed.funcs.iter().enumerate() {
         let idx = i as u32 + 1;
         if func_indices.insert(f.ident.name, idx).is_some() {
-            return Err(format!("duplicate function: {}", f.ident.as_str()));
+            return CheckAnalysis {
+                result: Err(CheckDiagnostic::new(
+                    DiagnosticCode::Name,
+                    f.ident.span,
+                    format!("duplicate function: {}", f.ident.as_str()),
+                )),
+                type_info: TypeInfo::default(),
+            };
         }
     }
 
@@ -43,16 +57,40 @@ pub fn check(parsed: Parsed) -> Result<Program, String> {
         }
     }
     collect_var_stmts(&program.top, &mut var_names);
-    let program = Program { var_names, ..program };
+    let program = Program {
+        var_names,
+        ..program
+    };
 
     for f in &program.funcs {
-        check_func(f, &program)?;
+        if let Err(diagnostic) = check_func(f, &program) {
+            return CheckAnalysis {
+                result: Err(diagnostic),
+                type_info: TypeInfo::default(),
+            };
+        }
     }
     for stmt in &program.top {
-        check_stmt(stmt, &program)?;
+        if let Err(diagnostic) = check_stmt(stmt, &program) {
+            return CheckAnalysis {
+                result: Err(diagnostic),
+                type_info: TypeInfo::default(),
+            };
+        }
     }
-    crate::infer::infer_program(&program)?;
-    Ok(program)
+    let (result, type_info) = crate::infer::infer_program(&program);
+    CheckAnalysis {
+        result: result.map(|()| program),
+        type_info,
+    }
+}
+
+pub fn check_with_diagnostics(parsed: Parsed) -> Result<Program, CheckDiagnostic> {
+    analyze(parsed).result
+}
+
+pub fn check(parsed: Parsed) -> Result<Program, String> {
+    check_with_diagnostics(parsed).map_err(|diagnostic| diagnostic.to_string())
 }
 
 // ---- 变量名收集（名字调用的放行判据）----
@@ -150,21 +188,26 @@ fn collect_var_expr(e: &Expr, set: &mut HashSet<Symbol>) {
     }
 }
 
-fn check_func(f: &P<Func>, program: &Program) -> Result<(), String> {
+fn check_func(f: &P<Func>, program: &Program) -> Result<(), CheckDiagnostic> {
     if !matches!(f.sig.tail.throw, xc_ast::func::FuncThrow::None) {
-        return Err(format!(
-            "throw qualifier not supported yet: {}",
-            f.ident.as_str()
+        return Err(CheckDiagnostic::new(
+            DiagnosticCode::Unsupported,
+            f.ident.span,
+            format!("throw qualifier not supported yet: {}", f.ident.as_str()),
         ));
     }
     match &f.body {
         FuncBody::Block(block) => check_block(block, program),
         FuncBody::Arrow(e) => check_expr(e, program),
-        FuncBody::Semicolon => Err(format!("function without body: {}", f.ident.as_str())),
+        FuncBody::Semicolon => Err(CheckDiagnostic::new(
+            DiagnosticCode::Unsupported,
+            f.ident.span,
+            format!("function without body: {}", f.ident.as_str()),
+        )),
     }
 }
 
-fn check_stmt(s: &Stmt, program: &Program) -> Result<(), String> {
+fn check_stmt(s: &Stmt, program: &Program) -> Result<(), CheckDiagnostic> {
     match &s.kind {
         StmtKind::Expr(e) | StmtKind::ExprSemi(e) => check_expr(e, program),
         StmtKind::Defer(b) => check_block(b, program),
@@ -178,23 +221,39 @@ fn check_stmt(s: &Stmt, program: &Program) -> Result<(), String> {
     }
 }
 
-fn check_block(b: &Block, program: &Program) -> Result<(), String> {
+fn check_block(b: &Block, program: &Program) -> Result<(), CheckDiagnostic> {
     for stmt in &b.stmts {
         check_stmt(stmt, program)?;
     }
     Ok(())
 }
 
-fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
+fn check_expr(e: &Expr, program: &Program) -> Result<(), CheckDiagnostic> {
     use ExprKind::*;
     match &e.kind {
-        Placeholder | This | SelfExpr | MacroCall(..) | Caret | Dollar | LambdaArgOrdinal(_)
-        | LambdaArgNamed(_) | AnonEnumerator(_) | Struct(_) | Match(..)
-        | Is(..) | NotIs(..) | Suffix(..) | MemberAccess(..)
-        | MemberDynamicAccess(..) | MethodCall(..) | Cast(..)
-        | Let(..) => {
-            Err(format!("unsupported expression in this build: {e:?}"))
-        }
+        Placeholder
+        | This
+        | SelfExpr
+        | MacroCall(..)
+        | Caret
+        | Dollar
+        | LambdaArgOrdinal(_)
+        | LambdaArgNamed(_)
+        | AnonEnumerator(_)
+        | Struct(_)
+        | Match(..)
+        | Is(..)
+        | NotIs(..)
+        | Suffix(..)
+        | MemberAccess(..)
+        | MemberDynamicAccess(..)
+        | MethodCall(..)
+        | Cast(..)
+        | Let(..) => Err(CheckDiagnostic::new(
+            DiagnosticCode::Unsupported,
+            e.span,
+            format!("unsupported expression in this build: {e:?}"),
+        )),
         Await(e) => check_expr(e, program),
         Dict(items) => {
             for item in items {
@@ -203,7 +262,13 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                         check_expr(k, program)?;
                         check_expr(v, program)?;
                     }
-                    _ => return Err("expansion in dict literal not supported".to_string()),
+                    _ => {
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Unsupported,
+                            e.span,
+                            "expansion in dict literal not supported",
+                        ));
+                    }
                 }
             }
             Ok(())
@@ -226,14 +291,22 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                     _ => false,
                 };
                 if !binding {
-                    return Err("catch pattern must be a binding".to_string());
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Unsupported,
+                        c.pattern.span,
+                        "catch pattern must be a binding",
+                    ));
                 }
                 for s in &c.stmts {
                     check_stmt(s, program)?;
                 }
             }
             if let Some(b) = else_block {
-                return Err("try-else is not supported yet".to_string());
+                return Err(CheckDiagnostic::new(
+                    DiagnosticCode::Unsupported,
+                    b.span,
+                    "try-else is not supported yet",
+                ));
             }
             Ok(())
         }
@@ -307,7 +380,8 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
             if let ExprKind::Path(p) = &callee.kind {
                 if p.segments.len() == 1 {
                     let name = p.segments[0].ident.name;
-                    if name.as_str() == "print" || name.as_str() == "panic"
+                    if name.as_str() == "print"
+                        || name.as_str() == "panic"
                         || name.as_str() == "spawn"
                     {
                         for arg in &args.0 {
@@ -320,7 +394,11 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                     if !program.func_indices.contains_key(&name)
                         && !program.var_names.contains(&name)
                     {
-                        return Err(format!("undefined function: {}", name.as_str()));
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Name,
+                            callee.span,
+                            format!("undefined function: {}", name.as_str()),
+                        ));
                     }
                     if let Some(f) = program.funcs.iter().find(|f| f.ident.name == name) {
                         let expected = f.sig.params.len();
@@ -332,19 +410,29 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                                     check_expr(e, program)?;
                                 }
                                 Argument::Named(..) => {
-                                    return Err("named arguments not supported yet".to_string())
+                                    return Err(CheckDiagnostic::new(
+                                        DiagnosticCode::Unsupported,
+                                        e.span,
+                                        "named arguments not supported yet",
+                                    ));
                                 }
                                 Argument::Expansion(..) => {
-                                    return Err(
-                                        "expansion arguments not supported yet".to_string()
-                                    )
+                                    return Err(CheckDiagnostic::new(
+                                        DiagnosticCode::Unsupported,
+                                        e.span,
+                                        "expansion arguments not supported yet",
+                                    ));
                                 }
                             }
                         }
                         if actual != expected {
-                            return Err(format!(
-                                "function {} expects {expected} arguments, got {actual}",
-                                name.as_str()
+                            return Err(CheckDiagnostic::new(
+                                DiagnosticCode::Type,
+                                e.span,
+                                format!(
+                                    "function {} expects {expected} arguments, got {actual}",
+                                    name.as_str()
+                                ),
                             ));
                         }
                         return Ok(());
@@ -356,16 +444,28 @@ fn check_expr(e: &Expr, program: &Program) -> Result<(), String> {
                 match arg {
                     Argument::Ordinal(e) => check_expr(e, program)?,
                     Argument::Named(..) => {
-                        return Err("named arguments not supported yet".to_string())
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Unsupported,
+                            e.span,
+                            "named arguments not supported yet",
+                        ));
                     }
                     Argument::Expansion(..) => {
-                        return Err("expansion arguments not supported yet".to_string())
+                        return Err(CheckDiagnostic::new(
+                            DiagnosticCode::Unsupported,
+                            e.span,
+                            "expansion arguments not supported yet",
+                        ));
                     }
                 }
             }
             Ok(())
         }
-        Error(_) => Err("internal: parse error node".to_string()),
+        Error(_) => Err(CheckDiagnostic::new(
+            DiagnosticCode::Internal,
+            e.span,
+            "internal: parse error node",
+        )),
     }
 }
 
