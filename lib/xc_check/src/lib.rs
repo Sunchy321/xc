@@ -8,5 +8,7 @@ pub use diagnostic::{CheckDiagnostic, DiagnosticCode, DiagnosticSeverity};
 pub use parse::{parse_file, parse_program, parse_program_with_diagnostics};
 pub use type_info::{TypeInfo, TypedExpression};
 
+mod borrow;
+mod borrow_summary;
 mod infer;
 mod types;

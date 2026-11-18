@@ -1,3 +1,25 @@
+use std::collections::HashMap;
+
+use xc_span::{Span, Symbol};
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProgramTypeFacts {
+    pub(crate) expressions: HashMap<(u32, u32), Ty>,
+    pub(crate) functions: HashMap<Symbol, FunctionTypeFacts>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FunctionTypeFacts {
+    pub(crate) params: Vec<Ty>,
+    pub(crate) ret: Ty,
+}
+
+impl ProgramTypeFacts {
+    pub(crate) fn expression_type(&self, span: Span) -> Option<&Ty> {
+        self.expressions.get(&(span.lo.0, span.hi.0))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Ty {
     Void,
@@ -13,6 +35,18 @@ pub(crate) enum Ty {
     Union(Vec<Ty>),
     Var(u32),
     Unknown,
+}
+
+impl Ty {
+    /// Whether this type is known to have copy semantics in the current X subset.
+    /// Unknown and compound owned values deliberately remain non-copy here.
+    pub(crate) fn is_copy(&self) -> bool {
+        match self {
+            Ty::Bool | Ty::Int | Ty::String | Ty::Reference { .. } => true,
+            Ty::Union(members) => members.iter().all(Ty::is_copy),
+            _ => false,
+        }
+    }
 }
 
 pub(crate) fn from_ast(ty: &xc_ast::ty::Type) -> Ty {

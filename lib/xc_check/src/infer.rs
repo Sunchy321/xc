@@ -14,7 +14,7 @@ use crate::{
     check::Program,
     diagnostic::{CheckDiagnostic, DiagnosticCode},
     type_info::{TypeInfo, TypedExpression},
-    types::{Ty, common_type, from_ast, is_subtype},
+    types::{FunctionTypeFacts, ProgramTypeFacts, Ty, common_type, from_ast, is_subtype},
 };
 
 type InferResult<T> = Result<T, CheckDiagnostic>;
@@ -73,7 +73,9 @@ struct Checker<'a> {
     current_return: Option<Ty>,
 }
 
-pub(crate) fn infer_program(program: &Program) -> (InferResult<()>, TypeInfo) {
+pub(crate) fn infer_program_with_facts(
+    program: &Program,
+) -> (InferResult<()>, TypeInfo, ProgramTypeFacts) {
     let mut checker = Checker::new(program);
     let result = checker
         .collect_signatures()
@@ -82,7 +84,8 @@ pub(crate) fn infer_program(program: &Program) -> (InferResult<()>, TypeInfo) {
         .and_then(|()| checker.check_functions())
         .and_then(|()| checker.solve_returns());
     let type_info = checker.type_info();
-    (result, type_info)
+    let type_facts = checker.program_type_facts();
+    (result, type_info, type_facts)
 }
 
 impl<'a> Checker<'a> {
@@ -154,6 +157,19 @@ impl<'a> Checker<'a> {
     fn check_functions(&mut self) -> InferResult<()> {
         for function in &self.program.funcs {
             let signature = self.signatures[&function.ident.name].clone();
+            if matches!(function.body, FuncBody::Semicolon) {
+                if matches!(signature.ret, Ty::Var(_)) {
+                    return Err(CheckDiagnostic::new(
+                        DiagnosticCode::Unsupported,
+                        function.ident.span,
+                        format!(
+                            "function without body requires an explicit return type: {}",
+                            function.ident.as_str()
+                        ),
+                    ));
+                }
+                continue;
+            }
             self.push_scope();
             for (param, ty) in function.sig.params.iter().zip(&signature.params) {
                 self.insert(param.ident.name, ty.clone());
@@ -166,13 +182,7 @@ impl<'a> Checker<'a> {
             let body_ty = match &function.body {
                 FuncBody::Block(block) => self.infer_block(block, body_expected)?,
                 FuncBody::Arrow(expression) => self.infer_expr(expression, body_expected)?,
-                FuncBody::Semicolon => {
-                    return Err(CheckDiagnostic::new(
-                        DiagnosticCode::Unsupported,
-                        function.ident.span,
-                        format!("function without body: {}", function.ident.as_str()),
-                    ));
-                }
+                FuncBody::Semicolon => unreachable!("bodyless declarations are handled above"),
             };
             self.current_return = previous_return;
             match signature.ret {
@@ -640,6 +650,23 @@ impl<'a> Checker<'a> {
                         )?;
                         Ok(Ty::Int)
                     }
+                    xc_span::symbol::op::Amp => Ok(Ty::Reference {
+                        target: Box::new(ty),
+                        mutable: false,
+                    }),
+                    _ if *operator == Symbol::intern("&mut") => Ok(Ty::Reference {
+                        target: Box::new(ty),
+                        mutable: true,
+                    }),
+                    xc_span::symbol::op::Multiply => match self.resolve(ty) {
+                        Ty::Reference { target, .. } => Ok(*target),
+                        Ty::Unknown | Ty::Var(_) => Ok(Ty::Unknown),
+                        _ => Err(CheckDiagnostic::new(
+                            DiagnosticCode::Type,
+                            expression.span,
+                            "dereference operator requires a reference",
+                        )),
+                    },
                     _ => Ok(Ty::Unknown),
                 }
             }
@@ -1333,6 +1360,37 @@ impl<'a> Checker<'a> {
             })
             .collect();
         TypeInfo::new(expressions, unavailable_expressions)
+    }
+
+    fn program_type_facts(&self) -> ProgramTypeFacts {
+        let mut expressions = HashMap::new();
+        for (span, ty) in &self.expression_types {
+            expressions.insert((span.lo.0, span.hi.0), self.resolve(ty.clone()));
+        }
+
+        let functions = self
+            .signatures
+            .iter()
+            .map(|(name, signature)| {
+                (
+                    *name,
+                    FunctionTypeFacts {
+                        params: signature
+                            .params
+                            .iter()
+                            .cloned()
+                            .map(|ty| self.resolve(ty))
+                            .collect(),
+                        ret: self.resolve(signature.ret.clone()),
+                    },
+                )
+            })
+            .collect();
+
+        ProgramTypeFacts {
+            expressions,
+            functions,
+        }
     }
 
     fn resolve_with_seen(&self, ty: Ty, seen: &mut HashSet<u32>) -> Ty {

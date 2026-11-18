@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use xc_ast::expr::{Argument, Expr, ExprItem, ExprKind};
-use xc_ast::func::{Func, FuncBody};
+use xc_ast::func::{Func, FuncBody, FuncReturn};
 use xc_ast::ptr::P;
 use xc_ast::stmt::{Block, Stmt, StmtKind};
 use xc_span::Symbol;
@@ -78,9 +78,21 @@ pub fn analyze(parsed: Parsed) -> CheckAnalysis {
             };
         }
     }
-    let (result, type_info) = crate::infer::infer_program(&program);
+    let (result, type_info, type_facts) = crate::infer::infer_program_with_facts(&program);
+    if let Err(diagnostic) = result {
+        return CheckAnalysis {
+            result: Err(diagnostic),
+            type_info,
+        };
+    }
+    if let Err(diagnostic) = crate::borrow::check_program(&program, &type_facts) {
+        return CheckAnalysis {
+            result: Err(diagnostic),
+            type_info,
+        };
+    }
     CheckAnalysis {
-        result: result.map(|()| program),
+        result: Ok(program),
         type_info,
     }
 }
@@ -199,11 +211,17 @@ fn check_func(f: &P<Func>, program: &Program) -> Result<(), CheckDiagnostic> {
     match &f.body {
         FuncBody::Block(block) => check_block(block, program),
         FuncBody::Arrow(e) => check_expr(e, program),
-        FuncBody::Semicolon => Err(CheckDiagnostic::new(
-            DiagnosticCode::Unsupported,
-            f.ident.span,
-            format!("function without body: {}", f.ident.as_str()),
-        )),
+        FuncBody::Semicolon => match f.sig.tail.ret {
+            FuncReturn::Type(_) => Ok(()),
+            FuncReturn::Inferred => Err(CheckDiagnostic::new(
+                DiagnosticCode::Unsupported,
+                f.ident.span,
+                format!(
+                    "function without body requires an explicit return type: {}",
+                    f.ident.as_str()
+                ),
+            )),
+        },
     }
 }
 
